@@ -23,10 +23,8 @@ G.FUNCS.start_run = function(e, args)
 		-- gate is re-checked -- if the leave somehow didn't take, it re-blocks
 		-- instead of starting a run while queued.
 		mm.pending_run = { e = e, args = args }
-		if MPAPI.queue_guard_overlay then
-			G.SETTINGS.paused = true
-			MPAPI.queue_guard_overlay:as_overlay()
-		end
+		G.SETTINGS.paused = true
+		MPAPI.queue_guard_overlay:as_overlay()
 		return
 	end
 	return _start_run_ref(e, args)
