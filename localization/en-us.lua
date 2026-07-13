@@ -69,6 +69,7 @@ return {
 			-- Queue guard overlay (blocks starting a run while queued)
 			k_queue_guard_title = 'Matchmaking In Progress',
 			k_queue_guard_desc = "You can't start a run while searching for a match.",
+			b_queue_guard_leave_play = 'Leave Queue & Play',
 			b_queue_guard_leave = 'Leave Queue',
 			b_queue_guard_stay = 'Stay Queued',
 			-- In-game chat feedback

@@ -25,6 +25,11 @@ end
 local _start_run_ref = G.FUNCS.start_run
 G.FUNCS.start_run = function(e, args)
 	if mm.run_gate_decision(MPAPI.matchmaking.is_queued()) == 'block' then
+		-- Stash the blocked action so the overlay's "Leave Queue & Play" can
+		-- replay it after leaving. Replay goes back through this wrapper, so the
+		-- gate is re-checked -- if the leave somehow didn't take, it re-blocks
+		-- instead of starting a run while queued.
+		mm.pending_run = { e = e, args = args }
 		if MPAPI.queue_guard_overlay then
 			G.SETTINGS.paused = true
 			MPAPI.queue_guard_overlay:as_overlay()
