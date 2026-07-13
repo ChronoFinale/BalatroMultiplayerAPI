@@ -125,8 +125,9 @@ MPAPI.load_mpapi_dir('lib')
 MPAPI.load_mpapi_dir('api', true)
 MPAPI.load_mpapi_dir('ui', true)
 
--- Load dev overrides if the dev/ directory exists (stripped in release builds)
-local dev_init = MPAPI.load_mpapi_file('dev/init.lua')
+-- Dev-only capability (account impersonation, etc.) lives in the separate
+-- Multiplayer DevTools mod (devtools/ in this repo) -- not loaded from here.
+-- This mod is identical for every user; installing DevTools is what opts in.
 
 G.E_MANAGER:add_event(Event({
 	blockable = false,
