@@ -35,6 +35,12 @@ local function schedule_tick()
 		delay = 0.25,
 		blockable = false,
 		blocking = false,
+		-- Survive G.E_MANAGER:clear_queue() (fired by Game:start_run / G:delete_run
+		-- when a singleplayer run starts/ends while queued). Without this, the
+		-- pending tick is deleted and the chain never re-arms (schedule_tick is only
+		-- ever called from inside a tick), freezing the "Queueing m:ss" status and
+		-- leaving _active stuck true for the rest of the session.
+		no_delete = true,
 		func = function()
 			if not _active then
 				return true
