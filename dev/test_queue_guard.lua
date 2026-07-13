@@ -22,7 +22,7 @@ local fixed_src = read_file(SRC_PATH)
 -- all -- G.FUNCS.start_run falls straight through to the original), so the
 -- regression test can prove it would actually have failed before the fix.
 local GATE_BLOCK = [[
-	if mm.run_gate_decision(MPAPI.matchmaking.is_queued()) == 'block' then
+	if MPAPI.matchmaking.is_queued() then
 		-- Stash the blocked action so the overlay's "Leave Queue & Play" can
 		-- replay it after leaving. Replay goes back through this wrapper, so the
 		-- gate is re-checked -- if the leave somehow didn't take, it re-blocks
@@ -106,19 +106,7 @@ local function check(cond, msg)
 end
 
 ------------------------
--- Test 1: pure gate function -- allow when not searching, block when searching
-------------------------
-
-print('-- scenario: pure mm.run_gate_decision --')
-local env1 = make_env()
-load_module(fixed_src, env1)
-local mm1 = env1.MPAPI._internal.mm
-
-check(mm1.run_gate_decision(false) == 'allow', 'pure: not searching -> allow')
-check(mm1.run_gate_decision(true) == 'block', 'pure: searching -> block')
-
-------------------------
--- Test 2 (fixed): not searching -> start_run proceeds untouched (zero overhead)
+-- Test 1 (fixed): not searching -> start_run proceeds untouched (zero overhead)
 ------------------------
 
 print()

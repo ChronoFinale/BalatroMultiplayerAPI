@@ -7,14 +7,7 @@ MPAPI.matchmaking = MPAPI.matchmaking or {}
 MPAPI._internal.mm = MPAPI._internal.mm or {}
 local mm = MPAPI._internal.mm
 
--- Pure: decide whether a run-start action may proceed, given only whether a
--- matchmaking search is currently active. Plain bool in, plain enum out --
--- exhaustively unit-testable with no G/Event/MPAPI stubbing required.
-function mm.run_gate_decision(is_searching)
-	return is_searching and 'block' or 'allow'
-end
-
--- Shell: G.FUNCS.start_run is the single vanilla chokepoint every "enter a run"
+-- G.FUNCS.start_run is the single vanilla chokepoint every "enter a run"
 -- flow funnels through -- New Run and Continue (via start_setup_run), Challenges
 -- (via start_challenge_run), the first-launch tutorial run, and the in-run
 -- "Start New Run" restart button all call it directly. It is also the function
@@ -24,7 +17,7 @@ end
 -- completely untouched when blocked.
 local _start_run_ref = G.FUNCS.start_run
 G.FUNCS.start_run = function(e, args)
-	if mm.run_gate_decision(MPAPI.matchmaking.is_queued()) == 'block' then
+	if MPAPI.matchmaking.is_queued() then
 		-- Stash the blocked action so the overlay's "Leave Queue & Play" can
 		-- replay it after leaving. Replay goes back through this wrapper, so the
 		-- gate is re-checked -- if the leave somehow didn't take, it re-blocks
