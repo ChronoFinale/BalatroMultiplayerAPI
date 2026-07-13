@@ -23,6 +23,11 @@ local fixed_src = read_file(SRC_PATH)
 -- regression test can prove it would actually have failed before the fix.
 local GATE_BLOCK = [[
 	if mm.run_gate_decision(MPAPI.matchmaking.is_queued()) == 'block' then
+		-- Stash the blocked action so the overlay's "Leave Queue & Play" can
+		-- replay it after leaving. Replay goes back through this wrapper, so the
+		-- gate is re-checked -- if the leave somehow didn't take, it re-blocks
+		-- instead of starting a run while queued.
+		mm.pending_run = { e = e, args = args }
 		if MPAPI.queue_guard_overlay then
 			G.SETTINGS.paused = true
 			MPAPI.queue_guard_overlay:as_overlay()
@@ -157,7 +162,65 @@ env4.call_start_run()
 check(env4.start_run_calls() == 1, 'leave-then-allow: start_run proceeds once no longer searching')
 
 ------------------------
--- Test 5 (RED control): pre-fix source has no gate -- run starts while searching
+-- Test 5 (fixed): "Leave Queue & Play" -- blocked action is stashed and can be
+-- replayed through the gate once no longer searching
+------------------------
+
+print()
+print('-- scenario: fixed run_guard.lua, leave queue and play (stash + replay) --')
+local env5 = make_env()
+load_module(fixed_src, env5)
+env5.set_searching(true)
+local marker_args = { tag = 'replay-me' }
+env5.G.FUNCS.start_run(nil, marker_args)
+local mm5 = env5.MPAPI._internal.mm
+check(env5.start_run_calls() == 0, 'leave-and-play: blocked while searching')
+check(mm5.pending_run ~= nil and mm5.pending_run.args == marker_args, 'leave-and-play: blocked action stashed with its original args')
+
+-- Simulate the overlay button: leave queue (is_queued flips false), replay.
+env5.set_searching(false)
+local pending = mm5.pending_run
+mm5.pending_run = nil
+env5.G.FUNCS.start_run(pending.e, pending.args)
+check(env5.start_run_calls() == 1, 'leave-and-play: replayed action proceeds after leaving')
+
+-- Replay must re-check the gate: if still searching, it re-blocks.
+local env5b = make_env()
+load_module(fixed_src, env5b)
+env5b.set_searching(true)
+env5b.call_start_run()
+local mm5b = env5b.MPAPI._internal.mm
+local pending_b = mm5b.pending_run
+env5b.G.FUNCS.start_run(pending_b.e, pending_b.args) -- still searching
+check(env5b.start_run_calls() == 0, 'leave-and-play: replay while STILL searching re-blocks (no run starts queued)')
+
+------------------------
+-- Test 6: handle:leave() fires the "left" event exactly once
+------------------------
+
+print()
+print('-- scenario: matchmaking handle fires left on leave() --')
+local HANDLE_SRC = read_file(this_dir .. '../api/matchmaking/handle.lua')
+local handle_MPAPI = {
+	matchmaking = {},
+	_internal = { mm = { remove_handle = function() end } },
+	get_connection = function() return nil end,
+	sendWarnMessage = function() end,
+}
+local handle_chunk = assert(loadstring(HANDLE_SRC, 'handle'))
+setfenv(handle_chunk, setmetatable({ MPAPI = handle_MPAPI }, { __index = _G }))
+handle_chunk()
+
+local h = handle_MPAPI.matchmaking._make_handle('TestMod', 'test_mode')
+local left_fired = 0
+h:on('left', function() left_fired = left_fired + 1 end)
+h:leave()
+check(left_fired == 1, 'handle: left event fired on leave()')
+h:leave()
+check(left_fired == 1, 'handle: left event NOT re-fired on a duplicate leave()')
+
+------------------------
+-- Test 7 (RED control): pre-fix source has no gate -- run starts while searching
 ------------------------
 
 print()
