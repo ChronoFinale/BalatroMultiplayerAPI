@@ -8,16 +8,6 @@ local join_lobby_callback
 
 MPAPI.create_lobby = function(mod_id, opts)
 	opts = opts or {}
-
-	-- Block player-initiated lobby creation while a matchmaking search is active
-	-- (same rule as run-start). Matchmaking never trips this: create_lobby is
-	-- only ever called for custom lobbies -- the server allocates the matchmade
-	-- lobby and clients only join it, and that auto-join runs after the handle
-	-- has a match_id, so is_queued() is already false.
-	if MPAPI.matchmaking.guard_queued(function() return MPAPI.create_lobby(mod_id, opts) end) then
-		return nil
-	end
-
 	local conn = MPAPI.get_connection()
 	local mqtt = MPAPI.get_mqtt()
 
@@ -97,14 +87,6 @@ end
 
 MPAPI.join_lobby = function(mod_id, code, opts)
 	opts = opts or {}
-
-	-- Block player-initiated joins while searching. Matchmaking's own auto-join
-	-- (dispatch.on_match_found) is unaffected: it runs after the matched handle
-	-- has a match_id, so is_queued() is already false by the time it calls here.
-	if MPAPI.matchmaking.guard_queued(function() return MPAPI.join_lobby(mod_id, code, opts) end) then
-		return nil
-	end
-
 	local conn = MPAPI.get_connection()
 	local mqtt = MPAPI.get_mqtt()
 

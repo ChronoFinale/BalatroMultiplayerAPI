@@ -1,21 +1,27 @@
--- Blocks conflicting "enter something else" actions while a matchmaking search
--- is active: starting a singleplayer run, and creating or joining a lobby. Bug:
--- nothing stopped a queued player from clicking Play -> New Run (or Continue / a
--- Challenge), nor from creating/joining a custom lobby -- either would leave the
--- search running server-side with no feedback while the client wandered
--- elsewhere. Maintainer verdict: none of those should be possible while queued.
+-- Blocks starting a singleplayer run while a matchmaking search is active, and
+-- provides the shared queue-guard mechanism consumer mods reuse for their own
+-- queue-conflicting actions (e.g. creating/joining a lobby). Bug: nothing
+-- stopped a queued player from clicking Play -> New Run (or Continue / a
+-- Challenge) -- the run tore down the main menu while the search stayed active
+-- server-side with no feedback. Maintainer verdict: not possible while queued.
 MPAPI.matchmaking = MPAPI.matchmaking or {}
 MPAPI._internal.mm = MPAPI._internal.mm or {}
 local mm = MPAPI._internal.mm
 
--- Shared gate used by every queue-conflicting entry point (the start_run wrap
--- below, and MPAPI.create_lobby / MPAPI.join_lobby in api/lobby/public.lua).
--- If the local player is searching, stash the blocked call as a replay closure
--- and show the leave-or-stay overlay instead of running it; returns true so the
--- caller aborts. Otherwise returns false and the caller proceeds normally.
--- The overlay's "Leave Queue & Continue" leaves every handle and invokes the
--- stashed closure, which re-enters the same guarded function -- is_queued() is
--- false by then, so it proceeds; if the leave somehow didn't take it re-blocks.
+-- Shared gate for any queue-conflicting entry point. If the local player is
+-- searching, stash the blocked call as a replay closure and show the leave-or-
+-- stay overlay instead of running it; returns true so the caller aborts.
+-- Otherwise returns false and the caller proceeds normally. The overlay's
+-- "Leave Queue & Continue" leaves every handle and invokes the stashed closure.
+--
+-- IMPORTANT: `replay` must re-enter the caller's OWN complete entry point, not a
+-- lower-level primitive. The start_run wrap below replays the wrapped
+-- G.FUNCS.start_run (a complete flow). A consumer guarding its lobby buttons
+-- must replay its own MP.pvp_join_lobby / create function -- NOT MPAPI.join_lobby
+-- directly, which would join server-side but skip the consumer's post-join setup
+-- (lobby mirror + UI transition), stranding the player outside the lobby. Since
+-- the replay re-enters a guarded entry point, is_queued() is false by then so it
+-- proceeds; if the leave somehow didn't take, it re-blocks.
 function MPAPI.matchmaking.guard_queued(replay)
 	if not MPAPI.matchmaking.is_queued() then
 		return false
