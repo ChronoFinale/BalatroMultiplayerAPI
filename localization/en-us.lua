@@ -50,7 +50,30 @@ return {
 			k_chat_dp_compat_info = '[MultiplayerAPI] For compatibility with DebugPlus, all DebugPlus commands must be prefixed with /. Anything sent without a / will be sent as a chat message.',
 			k_chat_ready_dp = '[MultiplayerAPI] Chat ready. Open console with / or T',
 			k_chat_ready = '[MultiplayerAPI] Chat ready. Press T to open',
-			k_chat_unknown_command = 'Unknown command',
+			k_chat_not_sent = '[!] Not delivered to other players:',
+			k_chat_sent_as = '[!] Filtered — delivered to others as:',
+			-- Moderation actions (report overlay / mute — slash commands removed)
+			k_chat_report_sent = '[MultiplayerAPI] Reported to moderators:',
+			k_chat_muted = '[MultiplayerAPI] Muted for this session:',
+			-- Report/mute overlay (lobby player cards)
+			k_report_title = 'Report',
+			b_report_harassment = 'Harassment',
+			b_report_hate = 'Hate speech',
+			b_report_threats = 'Threats',
+			b_report_spam = 'Spam',
+			b_report_other = 'Other',
+			b_mute_player = 'Mute',
+			-- Report player (pause menu entry + multi-player picker)
+			b_report_player_cap = { 'REPORT', 'PLAYER' },
+			k_report_pick_title = 'Report who?',
+			-- Post-match section builders (ui/post_match.lua — used by gamemode
+			-- mods' end screens: SPDRN win/lose, PVP next)
+			k_post_match_players = 'Players',
+			k_post_match_held = 'Your blocked messages',
+			k_post_match_held_error = 'Could not load blocked messages.',
+			k_appeal_sent = 'Appeal sent',
+			b_report_cap = 'REPORT',
+			b_appeal_cap = 'APPEAL',
 			-- Chat section in account overlay
 			k_chat_section_title = 'Chat',
 			k_chat_status_enabled = 'Chat is enabled',

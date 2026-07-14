@@ -109,3 +109,42 @@ MPAPI._internal.send_chat_message = function(code, message, callback)
 
 	conn.api:send_chat_message(conn.jwt_token, code, message, callback)
 end
+
+-- Moderation intake bridges. Same connect-guard pattern as chat; the moderation
+-- routes are best-effort on the relay, so these just relay success/error up.
+
+MPAPI._internal.report_player = function(code, reported_player_id, report_type, message, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:report_player(conn.jwt_token, code, reported_player_id, report_type, message, callback)
+end
+
+MPAPI._internal.appeal_message = function(code, message, original_band, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:appeal_message(conn.jwt_token, code, message, original_band, callback)
+end
+
+MPAPI._internal.mute_signal = function(code, muted_player_id, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:mute_signal(conn.jwt_token, code, muted_player_id, callback)
+end
+
+MPAPI._internal.list_held = function(code, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:list_held(conn.jwt_token, code, callback)
+end

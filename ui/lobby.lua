@@ -335,16 +335,26 @@ get_player_for_card = function(card)
 	end
 	for pid, slot in pairs(_player_card_map) do
 		if _cards[slot] == card then
-			return _current_lobby_ref._players[pid]
+			return _current_lobby_ref._players[pid], pid
 		end
 	end
 	return nil
 end
 
 lobby_card_click_override = function(self)
-	if self.params.mpapi_lobby_card then
-		return true
+	if not self.params.mpapi_lobby_card then
+		return
 	end
+
+	-- Front-facing cards only (a face-down slot is empty); never report yourself.
+	if self.facing == 'front' and _current_lobby_ref then
+		local player_data, pid = get_player_for_card(self)
+		if player_data and pid and pid ~= _current_lobby_ref.player_id then
+			MPAPI.show_report_overlay({ player_id = pid, name = player_data.displayName or pid })
+		end
+	end
+
+	return true
 end
 
 lobby_card_hover_override = function(self)

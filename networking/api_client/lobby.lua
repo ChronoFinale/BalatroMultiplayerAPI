@@ -146,7 +146,10 @@ function api_client:send_chat_message(jwt_token, code, message, callback)
 			return
 		end
 
-		cb(nil, { ok = true })
+		-- Pass the response body through: on a moderation rewrite it carries
+		-- publishText (what other players actually received).
+		local ok, data = pcall(api_client.json_decode, body)
+		cb(nil, (ok and type(data) == 'table') and data or { ok = true })
 	end
 
 	self.mqtt.on_http_error = function(msg)
@@ -159,4 +162,68 @@ function api_client:send_chat_message(jwt_token, code, message, callback)
 
 	local body = api_client.json_encode({ message = message })
 	self.mqtt:http_post_auth(self.base_url .. '/api/lobbies/' .. code .. '/chat', body, jwt_token)
+end
+
+-----------------------------
+-- MODERATION INTAKE (report / appeal / mute-signal / held)
+-- These feed the moderation review queue; they never gate gameplay, so they all
+-- use the generic JSON callback and surface only their own success/error.
+-----------------------------
+
+-- Report another player. `report_type` is a short category ('harassment',
+-- 'slur', ...); `message` is the offending text or a note (optional).
+function api_client:report_player(jwt_token, code, reported_player_id, report_type, message, callback)
+	if not self:_transport_ready() then
+		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
+		return
+	end
+
+	self:_setup_json_callback(callback)
+
+	local body = api_client.json_encode({
+		reportedPlayerId = reported_player_id,
+		type = report_type,
+		message = message,
+	})
+	self.mqtt:http_post_auth(self.base_url .. '/api/lobbies/' .. code .. '/report', body, jwt_token)
+end
+
+-- Contest one of your own messages that moderation blocked. `original_band` is
+-- the band the client recorded when the block happened (optional).
+function api_client:appeal_message(jwt_token, code, message, original_band, callback)
+	if not self:_transport_ready() then
+		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
+		return
+	end
+
+	self:_setup_json_callback(callback)
+
+	local body = api_client.json_encode({ message = message, originalBand = original_band })
+	self.mqtt:http_post_auth(self.base_url .. '/api/lobbies/' .. code .. '/appeal', body, jwt_token)
+end
+
+-- Forward the aggregate mute signal (the local mute itself is client-side).
+function api_client:mute_signal(jwt_token, code, muted_player_id, callback)
+	if not self:_transport_ready() then
+		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
+		return
+	end
+
+	self:_setup_json_callback(callback)
+
+	local body = api_client.json_encode({ mutedPlayerId = muted_player_id })
+	self.mqtt:http_post_auth(self.base_url .. '/api/lobbies/' .. code .. '/mute', body, jwt_token)
+end
+
+-- Fetch this player's held (blocked) messages for the lobby — the post-game
+-- appeal screen's data. Returns { held = { { message, band, createdAt }, ... } }.
+function api_client:list_held(jwt_token, code, callback)
+	if not self:_transport_ready() then
+		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
+		return
+	end
+
+	self:_setup_json_callback(callback)
+
+	self.mqtt:http_get_auth(self.base_url .. '/api/lobbies/' .. code .. '/held', jwt_token)
 end
