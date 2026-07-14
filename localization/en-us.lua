@@ -50,7 +50,30 @@ return {
 			k_chat_dp_compat_info = '[MultiplayerAPI] For compatibility with DebugPlus, all DebugPlus commands must be prefixed with /. Anything sent without a / will be sent as a chat message.',
 			k_chat_ready_dp = '[MultiplayerAPI] Chat ready. Open console with / or T',
 			k_chat_ready = '[MultiplayerAPI] Chat ready. Press T to open',
-			k_chat_unknown_command = 'Unknown command',
+			k_chat_not_sent = '[!] Not delivered to other players:',
+			k_chat_sent_as = '[!] Filtered — delivered to others as:',
+			-- Moderation actions (report overlay / mute — slash commands removed)
+			k_chat_report_sent = '[MultiplayerAPI] Reported to moderators:',
+			k_chat_muted = '[MultiplayerAPI] Muted for this session:',
+			-- Report/mute overlay (lobby player cards)
+			k_report_title = 'Report',
+			b_report_harassment = 'Harassment',
+			b_report_hate = 'Hate speech',
+			b_report_threats = 'Threats',
+			b_report_spam = 'Spam',
+			b_report_other = 'Other',
+			b_mute_player = 'Mute',
+			-- Report player (pause menu entry + multi-player picker)
+			b_report_player_cap = { 'REPORT', 'PLAYER' },
+			k_report_pick_title = 'Report who?',
+			-- Post-match section builders (ui/post_match.lua — used by gamemode
+			-- mods' end screens: SPDRN win/lose, PVP next)
+			k_post_match_players = 'Players',
+			k_post_match_held = 'Your blocked messages',
+			k_post_match_held_error = 'Could not load blocked messages.',
+			k_appeal_sent = 'Appeal sent',
+			b_report_cap = 'REPORT',
+			b_appeal_cap = 'APPEAL',
 			-- Chat section in account overlay
 			k_chat_section_title = 'Chat',
 			k_chat_status_enabled = 'Chat is enabled',
@@ -66,12 +89,6 @@ return {
 			k_chat_birth_privacy_1 = 'We do not store your date of birth anywhere.',
 			k_chat_birth_privacy_2 = 'It is collected solely to enable chat on your account, as required by child safety regulations in many countries.',
 			b_chat_submit_age = 'Confirm',
-			-- Queue guard overlay (blocks starting a run while queued)
-			k_queue_guard_title = 'Matchmaking In Progress',
-			k_queue_guard_desc = "You can't start a run or join a lobby while searching for a match.",
-			b_queue_guard_leave_play = 'Leave Queue & Continue',
-			b_queue_guard_leave = 'Leave Queue',
-			b_queue_guard_stay = 'Stay Queued',
 			-- In-game chat feedback
 			k_chat_age_blocked = '[MultiplayerAPI] Chat is not available for your account.',
 			k_chat_client_disabled = '[MultiplayerAPI] Chat is disabled. Re-enable it in the account overlay.',
@@ -87,20 +104,6 @@ return {
 			b_open_lobby_cap = { 'OPEN', 'LOBBY' },
 			b_lobby_options_cap = { 'LOBBY', 'OPTIONS' },
 			b_leave_lobby_cap = { 'LEAVE', 'LOBBY' },
-			b_start_game_cap = { 'START', 'GAME' },
-			-- Shared matchmaking / lobby menu strings (used by all consumer mods, e.g.
-			-- Speedrunning and PvP), kept here so consumers don't each duplicate them.
-			b_leaderboard_cap = 'LEADERBOARD',
-			b_practice_cap = 'PRACTICE',
-			b_searching_cap = 'SEARCHING...',
-			b_cancel_search_cap = 'CANCEL',
-			b_ready_cap = 'READY',
-			b_unready_cap = 'UNREADY',
-			k_ranked_cap = 'RANKED',
-			k_casual_cap = 'CASUAL',
-			k_rating_cap = 'RATING',
-			k_best_score_cap = 'BEST',
-			k_waiting_for_players = 'Waiting for players...',
 			-- Deck ban-pick draft
 			k_banpick_title = 'DECK BAN',
 			k_banpick_waiting = 'Selecting decks...',
@@ -109,8 +112,6 @@ return {
 			k_banpick_bans_left = 'Bans left:',
 			k_banpick_decks_left = 'Decks left:',
 			k_banpick_ban = 'Ban',
-			k_banpick_pick = 'Pick',
-			k_banpick_pick_turn = 'Your turn: pick your deck',
 			k_banpick_banned = 'BANNED',
 		},
 	},
