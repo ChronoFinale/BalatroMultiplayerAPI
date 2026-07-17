@@ -17,9 +17,10 @@
 
 -- ── Stubs to load the real module ───────────────────────────────────────────
 MPAPI = {}
+localize = function(k) return k end
 G = {
 	FUNCS = {},
-	C = { GREEN = 'green', MULT = 'mult', BLUE = 'blue', WHITE = 'white', BLACK = 'black', CLEAR = 'clear', UI = { BACKGROUND_INACTIVE = 'inactive', TEXT_LIGHT = 'light' } },
+	C = { GREEN = 'green', RED = 'red', MULT = 'mult', BLUE = 'blue', WHITE = 'white', BLACK = 'black', CLEAR = 'clear', UI = { BACKGROUND_INACTIVE = 'inactive', TEXT_LIGHT = 'light' } },
 }
 
 dofile('api/ban_pick.lua')
@@ -134,7 +135,7 @@ G.FUNCS.mpapi_ban_pick_confirm_check(e)
 check(e.config.button == nil and e.config.colour == 'inactive', 'empty selection: button disabled')
 SEL.toggle(SEL.list(), 'b_red', 1)
 G.FUNCS.mpapi_ban_pick_confirm_check(e)
-check(e.config.button == 'mpapi_ban_pick_confirm' and e.config.colour == 'mult', 'full selection: button live (ban colour)')
+check(e.config.button == 'mpapi_ban_pick_confirm' and e.config.colour == 'green', 'full selection: button live and green (the confirm signal)')
 
 -- ── full draft with a pick step ends in on_complete ─────────────────────────
 print()
@@ -165,24 +166,41 @@ check(r[1] ~= 'b_red' and r[2] ~= 'b_red', 'randomize never picks banned decks')
 check(r[1] ~= r[2], 'randomize picks distinct decks')
 check(r[1] == 'b_blue' and r[2] == 'b_yellow', 'randomize honours the injected rng')
 
--- ── dice button: rerolls the module selection; confirm commits it ───────────
+-- ── random button: BLIND commit -- nothing revealed until confirmed ─────────
 print()
-print('-- dice button: reroll then confirm commits the random selection --')
+print('-- random: arms blind, reveals nothing, confirm rolls and commits --')
 start_draft({ { actor = 1, action = 'ban', count = 2 }, { actor = 2, action = 'ban', count = 1 } })
-G.FUNCS.mpapi_ban_pick_random()
-check(#SEL.list() == 2, 'dice press fills the selection to the needed count')
-local rolled = { SEL.list()[1], SEL.list()[2] }
-G.FUNCS.mpapi_ban_pick_random()
-check(#SEL.list() == 2, 'second dice press re-rolls (still a full selection)')
 local e3 = { config = {} }
 G.FUNCS.mpapi_ban_pick_random_check(e3)
-check(e3.config.button == 'mpapi_ban_pick_random' and e3.config.colour == 'blue', 'dice button live on our turn')
-rolled = { SEL.list()[1], SEL.list()[2] }
-G.FUNCS.mpapi_ban_pick_confirm()
-check(LOBBY._ban_pick.banned[rolled[1]] == true and LOBBY._ban_pick.banned[rolled[2]] == true,
-	'confirm commits the rolled selection')
+check(e3.config.button == 'mpapi_ban_pick_random' and e3.config.colour == 'blue', 'random button live on our turn')
+G.FUNCS.mpapi_ban_pick_random()
+check(SEL.armed() == true, 'random press arms blind-random')
+check(#SEL.list() == 0, 'arming reveals NOTHING (no marks, no picks exist yet)')
 G.FUNCS.mpapi_ban_pick_random_check(e3)
-check(e3.config.button == nil, "dice button disabled once it's not our turn")
+check(e3.config.colour == 'red', 'armed random button goes red (Cancel Random)')
+check(SEL.ui().random_text == 'k_banpick_cancel_random', 'random label flips to Cancel Random')
+check(SEL.ui().confirm_text == 'k_banpick_confirm_random', 'confirm label reads Confirm Random')
+check(SEL.ui().count_text == '?/2', 'counter hides the picks (?/N)')
+local e4 = { config = {} }
+G.FUNCS.mpapi_ban_pick_confirm_check(e4)
+check(e4.config.button == 'mpapi_ban_pick_confirm', 'confirm goes live while armed (no marks needed)')
+G.FUNCS.mpapi_ban_pick_random()
+check(SEL.armed() == false, 'second random press disarms back to manual')
+G.FUNCS.mpapi_ban_pick_random()
+check(SEL.armed() == true, 're-armed')
+G.FUNCS.mpapi_ban_pick_confirm()
+check(SEL.armed() == false, 'confirm consumed the armed state')
+local banned_count = 0
+for _ in pairs(LOBBY._ban_pick.banned) do banned_count = banned_count + 1 end
+check(banned_count == 2, 'confirm rolled and committed exactly the needed count')
+check(LOBBY._ban_pick.sched_index == 2, "turn advanced to the guest's step")
+
+print()
+print('-- random: manual marks clear on arm; tile-click disarms --')
+start_draft({ { actor = 1, action = 'ban', count = 2 }, { actor = 2, action = 'ban', count = 1 } })
+SEL.toggle(SEL.list(), 'b_red', 2)
+G.FUNCS.mpapi_ban_pick_random()
+check(SEL.armed() and #SEL.list() == 0, 'arming clears manual marks')
 
 -- ── Summary ─────────────────────────────────────────────────────────────────
 print()

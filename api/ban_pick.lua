@@ -32,12 +32,16 @@ local _overlay = nil
 local _render = nil
 local _fired = false
 
--- Select-and-confirm UI state: deck keys raised this turn, committed by the
+-- Select-and-confirm UI state: item ids raised this turn, committed by the
 -- Confirm button. Lives outside the overlay so it survives rebuilds on state
 -- broadcasts (pruned against each new state instead).
 local _selected = {}
-local _sel_ui = { count_text = '' }
+local _sel_ui = { count_text = '', confirm_text = '', random_text = '' }
 local _areas = {}
+-- Blind-random mode: arming Random commits you to unseen picks -- nothing is
+-- marked or revealed, and the actual roll happens only when Confirm is pressed
+-- (so there is nothing to peek at or reroll-fish for).
+local _random_armed = false
 
 -----------------------------
 -- Helpers
@@ -257,6 +261,13 @@ BP._selection = {
 	list = function()
 		return _selected
 	end,
+	-- test seams: is blind-random armed? / the live UI strings
+	armed = function()
+		return _random_armed
+	end,
+	ui = function()
+		return _sel_ui
+	end,
 }
 
 -----------------------------
@@ -307,9 +318,22 @@ local function set_card_selected(card, on, action)
 	end
 end
 
--- Re-derive every tile's raised/tagged state and the live counter from _selected.
+-- Re-derive every tile's raised/tagged state and the live texts (counter +
+-- button labels) from _selected. When blind-random is armed the counter reads
+-- ?/N (the picks don't exist yet), Confirm reads "Confirm Random", and the
+-- Random button flips to "Cancel Random".
 local function sync_selection_ui(state)
-	_sel_ui.count_text = tostring(#_selected) .. '/' .. tostring(selection_needed(state))
+	local step = current_step(state)
+	local is_pick = step and step.action == "pick"
+	if _random_armed then
+		_sel_ui.count_text = '?/' .. tostring(selection_needed(state))
+		_sel_ui.confirm_text = localize('k_banpick_confirm_random')
+		_sel_ui.random_text = localize('k_banpick_cancel_random')
+	else
+		_sel_ui.count_text = tostring(#_selected) .. '/' .. tostring(selection_needed(state))
+		_sel_ui.confirm_text = localize(is_pick and 'k_banpick_confirm_pick' or 'k_banpick_confirm')
+		_sel_ui.random_text = localize('k_banpick_random')
+	end
 	local step = current_step(state)
 	local action = step and step.action or "ban"
 	for _, area in ipairs(_areas) do
@@ -356,9 +380,10 @@ local function deck_tile(item, banned, area, decorate)
 		if banned or not state or not is_my_turn(lobby, state) then
 			return
 		end
-		if selection_toggle(_selected, id, selection_needed(state)) ~= "blocked" then
-			sync_selection_ui(state)
-		end
+		-- Touching a tile leaves blind-random mode: manual selection resumes.
+		_random_armed = false
+		selection_toggle(_selected, id, selection_needed(state))
+		sync_selection_ui(state)
 	end
 
 	-- Selection drives the raise through set_card_selected; neuter the vanilla
@@ -368,12 +393,76 @@ local function deck_tile(item, banned, area, decorate)
 	end
 
 	function card:hover()
-		local back = Back(self.config.center)
-
 		local badges = { n = G.UIT.C, config = { colour = G.C.CLEAR, align = "cm" }, nodes = {} }
 		SMODS.create_mod_badges(self.config.center, badges.nodes)
 		if badges.nodes.mod_set then
 			badges.nodes.mod_set = nil
+		end
+
+		-- Name row + description box for one Back center (the tile itself, and --
+		-- when the item carries a cocktail composition -- each contained deck).
+		local function back_section(center, name_scale)
+			local b = Back(center)
+			return {
+				n = G.UIT.R,
+				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
+				nodes = {
+					{
+						n = G.UIT.O,
+						config = {
+							object = DynaText({
+								string = b:get_name(),
+								maxw = 4,
+								colours = { G.C.WHITE }, shadow = true, bump = true, scale = name_scale, pop_in = 0, silent = true,
+							}),
+						},
+					},
+				},
+			}, {
+				n = G.UIT.R,
+				config = {
+					align = "cm",
+					colour = G.C.WHITE, minh = 0.5, maxh = 3, minw = 3, maxw = 4, r = 0.1,
+				},
+				nodes = {
+					{
+						n = G.UIT.O,
+						config = {
+							object = UIBox({
+								definition = b:generate_UI(),
+								config = { offset = { x = 0, y = 0 } },
+							}),
+						},
+					},
+				},
+			}
+		end
+
+		local inner = {}
+		local name_row, desc_row = back_section(self.config.center, 0.5)
+		inner[#inner + 1] = name_row
+		inner[#inner + 1] = desc_row
+
+		-- Contained decks (e.g. the weekly cocktail composition, delivered as
+		-- item.cocktail = { deck_key, ... }): render each contained deck's own name
+		-- and effects under the tile's description.
+		if type(item) == "table" and type(item.cocktail) == "table" then
+			for _, ckey in ipairs(item.cocktail) do
+				local ccenter = G.P_CENTERS[ckey]
+				if ccenter then
+					local cname, cdesc = back_section(ccenter, 0.38)
+					inner[#inner + 1] = cname
+					inner[#inner + 1] = cdesc
+				end
+			end
+		end
+
+		if badges.nodes[1] then
+			inner[#inner + 1] = {
+				n = G.UIT.R,
+				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
+				nodes = { badges },
+			}
 		end
 
 		self.config.h_popup = { n = G.UIT.C, config = { align = "cm", padding = 0.1 }, nodes = {} }
@@ -385,47 +474,7 @@ local function deck_tile(item, banned, area, decorate)
 				{
 					n = G.UIT.C,
 					config = { align = "cm", r = 0.1, colour = G.C.L_BLACK, padding = 0.1, outline = 1 },
-					nodes = {
-						{
-							n = G.UIT.R,
-							config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
-							nodes = {
-								{
-									n = G.UIT.O,
-									config = {
-										object = DynaText({
-											string = back:get_name(),
-											maxw = 4,
-											colours = { G.C.WHITE }, shadow = true, bump = true, scale = 0.5, pop_in = 0, silent = true,
-										}),
-									},
-								},
-							},
-						},
-						{
-							n = G.UIT.R,
-							config = {
-								align = "cm",
-								colour = G.C.WHITE, minh = 0.5, maxh = 3, minw = 3, maxw = 4, r = 0.1,
-							},
-							nodes = {
-								{
-									n = G.UIT.O,
-									config = {
-										object = UIBox({
-											definition = back:generate_UI(),
-											config = { offset = { x = 0, y = 0 } },
-										}),
-									},
-								},
-							},
-						},
-						badges.nodes[1] and {
-							n = G.UIT.R,
-							config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
-							nodes = { badges },
-						},
-					},
+					nodes = inner,
 				},
 			},
 		})
@@ -552,20 +601,21 @@ local function build_banpick_contents()
 					func = 'mpapi_ban_pick_confirm_check',
 				},
 				nodes = {
-					{ n = G.UIT.T, config = { text = localize(is_pick and 'k_banpick_confirm_pick' or 'k_banpick_confirm'), scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+					{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'confirm_text', scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
 				},
 			},
 			{ n = G.UIT.C, config = { minw = 0.25 } },
 			{
 				n = G.UIT.C,
 				config = {
-					align = 'cm', minw = 1.6, minh = 0.7, r = 0.1, padding = 0.08,
+					-- Wide enough for its longest live label ("Cancel Random").
+					align = 'cm', minw = 2.6, minh = 0.7, r = 0.1, padding = 0.08,
 					shadow = true, hover = true, colour = G.C.UI.BACKGROUND_INACTIVE,
 					button = 'mpapi_ban_pick_random',
 					func = 'mpapi_ban_pick_random_check',
 				},
 				nodes = {
-					{ n = G.UIT.T, config = { text = localize('k_banpick_random'), scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+					{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'random_text', scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
 				},
 			},
 		} }
@@ -716,8 +766,10 @@ function BP.on_state(lobby, state)
 	end
 	lobby._ban_pick = state
 
-	-- Drop marks the broadcast invalidated (opponent banned them, cap shrank).
+	-- Drop marks the broadcast invalidated (opponent banned them, cap shrank),
+	-- and disarm blind-random -- arming is cheap to redo and never stale.
 	_selected = selection_prune(_selected, state)
+	_random_armed = false
 
 	if _overlay then
 		_overlay:update()
@@ -763,6 +815,7 @@ function BP.start(lobby, config, on_complete)
 	_fired = false
 	_selected = {}
 	_areas = {}
+	_random_armed = false
 
 	if lobby.is_host then
 		local pool = (config.build_pool and config.build_pool()) or default_build_pool(config.pool_size)
@@ -809,9 +862,11 @@ G.FUNCS.mpapi_ban_pick_confirm_check = function(e)
 	local lobby = MPAPI.get_current_lobby()
 	local s = lobby and lobby._ban_pick
 	local needed = selection_needed(s)
-	if s and is_my_turn(lobby, s) and needed > 0 and #_selected == needed then
-		local step = current_step(s)
-		e.config.colour = (step and step.action == "pick") and G.C.GREEN or G.C.MULT
+	local ready = s and is_my_turn(lobby, s) and needed > 0 and (#_selected == needed or _random_armed)
+	if ready then
+		-- Green = "go", always: Confirm Ban / Confirm Pick / Confirm Random all
+		-- share the confirm signal colour (the label carries the meaning).
+		e.config.colour = G.C.GREEN
 		e.config.button = "mpapi_ban_pick_confirm"
 	else
 		e.config.colour = G.C.UI.BACKGROUND_INACTIVE
@@ -819,13 +874,18 @@ G.FUNCS.mpapi_ban_pick_confirm_check = function(e)
 	end
 end
 
--- Random: replace the selection with a fresh random one (full reroll on every
--- press). Committing still goes through Confirm, so a bad roll costs nothing.
+-- Random: BLIND commit. Pressing Random arms random mode -- it clears any
+-- manual marks, raises nothing, reveals nothing (counter reads ?/N, the button
+-- goes green). Confirm then rolls the actual picks at commit time and sends
+-- them through; there is nothing to peek at or reroll-fish for. Pressing
+-- Random again (or clicking any tile) disarms back to manual selection.
 G.FUNCS.mpapi_ban_pick_random_check = function(e)
 	local lobby = MPAPI.get_current_lobby()
 	local s = lobby and lobby._ban_pick
 	if s and is_my_turn(lobby, s) and selection_needed(s) > 0 then
-		e.config.colour = G.C.BLUE
+		-- Idle: blue "Random". Armed: red "Cancel Random" (red = back out; the
+		-- green go-signal lives on Confirm).
+		e.config.colour = _random_armed and G.C.RED or G.C.BLUE
 		e.config.button = "mpapi_ban_pick_random"
 	else
 		e.config.colour = G.C.UI.BACKGROUND_INACTIVE
@@ -839,11 +899,10 @@ G.FUNCS.mpapi_ban_pick_random = function(_e)
 	if not s or not is_my_turn(lobby, s) then
 		return
 	end
-	local out = selection_randomize(s)
-	if #out == 0 then
-		return
+	_random_armed = not _random_armed
+	if _random_armed then
+		_selected = {}
 	end
-	_selected = out
 	sync_selection_ui(s)
 end
 
@@ -857,12 +916,26 @@ G.FUNCS.mpapi_ban_pick_confirm = function(_e)
 		return
 	end
 	local needed = selection_needed(s)
-	if needed == 0 or #_selected ~= needed then
+	if needed == 0 then
 		return
 	end
-	local keys = _selected
+	local ids
+	if _random_armed then
+		-- Blind random: the picks are rolled HERE, at commit time -- the player
+		-- confirmed "random", never a revealed selection.
+		_random_armed = false
+		ids = selection_randomize(s)
+		if #ids == 0 then
+			return
+		end
+	else
+		if #_selected ~= needed then
+			return
+		end
+		ids = _selected
+	end
 	_selected = {}
-	for _, k in ipairs(keys) do
-		BP.request_ban(k)
+	for _, id in ipairs(ids) do
+		BP.request_ban(id)
 	end
 end
