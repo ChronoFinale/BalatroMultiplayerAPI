@@ -528,6 +528,196 @@ BP._stake_column = {
 	release = release_stake_column,
 }
 
+-- Pure vertical-clamp decision for the hover popup (see card:hover). The
+-- engine's Moveable alignment flips a popup above ('tm') or below ('bm') its
+-- tile but only ever clamps horizontally (Moveable:lr_clamp), so a popup
+-- taller than the space on its side of the tile runs off screen -- e.g. the
+-- weekly cocktail's full composition hovered from the bottom tile row.
+-- Given the popup's post-move position, return the y that keeps it inside
+-- [edge, room_h - edge] (room top edge is y = 0). Bottom edge is applied
+-- first so the top-edge rule wins for popups taller than the room: the top
+-- of the content is what the player must be able to read.
+local function popup_clamp_y(y, h, room_h, edge)
+	if y + h > room_h - edge then
+		y = room_h - edge - h
+	end
+	if y < edge then
+		y = edge
+	end
+	return y
+end
+
+-- Exposed for the standalone test harness (dev/test_banpick_popup_clamp.lua).
+BP._popup = {
+	clamp_y = popup_clamp_y,
+}
+
+-- Keep a hover popup on screen. Two mechanisms, because the engine treats
+-- still and moving anchors differently (Moveable:move gates a minor's
+-- move_with_major on `not STATIONARY or NEW_ALIGNMENT`):
+--
+-- 1. STATIC anchors (the badge; an unmoving tile): a one-shot mutation of
+--    the alignment offset, applied before the popup's first move -- the
+--    changed offset makes align_to_major raise NEW_ALIGNMENT, so the whole
+--    content tree re-aligns to the clamped position. Directly clamping T/VT
+--    would NOT work here: the drawn content tree never re-follows a
+--    stationary popup's outer box, so only the invisible box would move.
+-- 2. MOVING anchors (selecting a tile raises it, carrying the popup): a
+--    per-frame clamp of the outer transforms after every move. While the
+--    anchor moves, nothing is stationary, so the content tree re-follows
+--    the clamped box each frame (one frame behind, which settles).
+--
+-- lr_clamp covers the horizontal axis for wide popups.
+local function clamp_popup(popup, anchor)
+	if not popup or not popup.T or popup._mp_tb_clamp then
+		return
+	end
+	popup._mp_tb_clamp = true
+	local a = popup.alignment
+	if a then
+		a.lr_clamp = true
+		if a.offset and anchor and anchor.T then
+			-- Recreate the engine's alignment geometry for the popup top
+			-- (align_to_major: 't' -> above the anchor, 'b' -> below it).
+			local t = tostring(a.type or '')
+			local top
+			if t:find('t') then
+				top = anchor.T.y + a.offset.y - popup.T.h
+			elseif t:find('b') then
+				top = anchor.T.y + anchor.T.h + a.offset.y
+			end
+			if top then
+				a.offset.y = a.offset.y + (popup_clamp_y(top, popup.T.h, G.ROOM.T.h, 0.05) - top)
+			end
+		end
+	end
+	local base_move = popup.move
+	popup.move = function(p, dt)
+		base_move(p, dt)
+		p.T.y = popup_clamp_y(p.T.y, p.T.h, G.ROOM.T.h, 0.05)
+		p.VT.y = popup_clamp_y(p.VT.y, p.VT.h, G.ROOM.T.h, 0.05)
+	end
+end
+
+-- LAZY popup-row builders: DynaText/UIBox objects register themselves
+-- globally the moment they are constructed, so anything built and then NOT
+-- placed in a drawn popup would still be drawn -- unparented, at the screen
+-- origin (the garbled text-over-the-status-panel bug). Only ever call these
+-- from inside a hover that immediately places the result.
+local function popup_name_row(text, name_scale)
+	return {
+		n = G.UIT.R,
+		config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
+		nodes = {
+			{
+				n = G.UIT.O,
+				config = {
+					object = DynaText({
+						string = text,
+						maxw = 4,
+						colours = { G.C.WHITE }, shadow = true, bump = true, scale = name_scale, pop_in = 0, silent = true,
+					}),
+				},
+			},
+		},
+	}
+end
+local function popup_desc_row(center)
+	return {
+		n = G.UIT.R,
+		config = {
+			align = "cm",
+			colour = G.C.WHITE, minh = 0.5, maxh = 3, minw = 3, maxw = 4, r = 0.1,
+		},
+		nodes = {
+			{
+				n = G.UIT.O,
+				config = {
+					object = UIBox({
+						definition = Back(center):generate_UI(),
+						config = { offset = { x = 0, y = 0 } },
+					}),
+				},
+			},
+		},
+	}
+end
+
+-- The weekly cocktail's title row (server-delivered short name, a proper
+-- noun shown verbatim, plus the LOCALIZED "Cocktail" suffix -- "Casjb"
+-- renders as "Casjb Cocktail" in English and the suffix translates
+-- elsewhere) and mix line, shared by both cocktail popups.
+local function composition_header(item)
+	local rows = {}
+	if item.cocktail_name then
+		rows[#rows + 1] = popup_name_row(tostring(item.cocktail_name) .. ' ' .. localize('k_cocktail_suffix'), 0.5)
+	end
+	rows[#rows + 1] = {
+		n = G.UIT.R,
+		config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.35 },
+		nodes = {
+			{ n = G.UIT.T, config = { text = localize('k_banpick_weekly_mix'), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+		},
+	}
+	return rows
+end
+
+-- Compact composition rows for the TILE hover: header + contained deck
+-- names only, no effect boxes -- the full breakdown lives in the badge's
+-- detail popup.
+local function composition_rows(item)
+	local rows = composition_header(item)
+	for _, ckey in ipairs(item.cocktail) do
+		local ccenter = G.P_CENTERS[ckey]
+		if ccenter then
+			rows[#rows + 1] = popup_name_row(Back(ccenter):get_name(), 0.38)
+		end
+	end
+	return rows
+end
+
+-- The badge's full detail: header, then the contained decks laid out
+-- SIDE BY SIDE -- one column per deck, name over effects. Horizontal on
+-- purpose: three stacked descriptions are taller than any screen position
+-- can guarantee, while three columns stay ~2 units tall and always fit.
+local function composition_detail(item)
+	local cols = {}
+	for _, ckey in ipairs(item.cocktail) do
+		local ccenter = G.P_CENTERS[ckey]
+		if ccenter then
+			cols[#cols + 1] = {
+				n = G.UIT.C,
+				config = { align = "tm", padding = 0.05 },
+				nodes = {
+					popup_name_row(Back(ccenter):get_name(), 0.38),
+					popup_desc_row(ccenter),
+				},
+			}
+		end
+	end
+	local rows = composition_header(item)
+	rows[#rows + 1] = { n = G.UIT.R, config = { align = "cm" }, nodes = cols }
+	return rows
+end
+
+-- Shared visual wrapper for both hover popups (tile + badge): the outlined
+-- dark container the columns sit in.
+local function popup_container(columns)
+	return {
+		n = G.UIT.C,
+		config = { align = "cm", padding = 0.1 },
+		nodes = {
+			{
+				n = G.UIT.C,
+				config = { align = "cm", r = 0.1, colour = G.C.L_BLACK, padding = 0.1, outline = 1 },
+				nodes = {
+					{ n = G.UIT.R, config = { align = "tm" }, nodes = columns },
+				},
+			},
+		},
+	}
+end
+
 -- One deck tile: a card showing the deck's Back center. `item` may carry metadata; the
 -- consumer's decorate_tile(card, item) is called after emplace (e.g. to stamp a stake
 -- sticker via card.sticker). BANNED tiles are debuffed.
@@ -582,82 +772,23 @@ local function deck_tile(item, banned, area, decorate)
 			badges.nodes.mod_set = nil
 		end
 
-		-- LAZY builders: DynaText/UIBox objects register themselves globally the
-		-- moment they are constructed, so anything built and then NOT placed in the
-		-- popup would still be drawn -- unparented, at the screen origin (the
-		-- garbled text-over-the-status-panel bug). Only ever construct on use.
-		local function name_row(text, name_scale)
-			return {
-				n = G.UIT.R,
-				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
-				nodes = {
-					{
-						n = G.UIT.O,
-						config = {
-							object = DynaText({
-								string = text,
-								maxw = 4,
-								colours = { G.C.WHITE }, shadow = true, bump = true, scale = name_scale, pop_in = 0, silent = true,
-							}),
-						},
-					},
-				},
-			}
-		end
-		local function desc_row(center)
-			return {
-				n = G.UIT.R,
-				config = {
-					align = "cm",
-					colour = G.C.WHITE, minh = 0.5, maxh = 3, minw = 3, maxw = 4, r = 0.1,
-				},
-				nodes = {
-					{
-						n = G.UIT.O,
-						config = {
-							object = UIBox({
-								definition = Back(center):generate_UI(),
-								config = { offset = { x = 0, y = 0 } },
-							}),
-						},
-					},
-				},
-			}
-		end
-
 		-- Two columns: deck info (left) and, for tuple pools, stake info (right).
 		local left = {}
 		local right = {}
 		local has_composition = type(item) == "table" and type(item.cocktail) == "table"
 
-		if has_composition and item.cocktail_name then
-			-- A named composition (the weekly cocktail) presents under its OWN title:
-			-- the server-delivered short name (a proper noun, shown verbatim) plus the
-			-- LOCALIZED "Cocktail" suffix -- so "Casjb" renders as "Casjb Cocktail" in
-			-- English and the suffix translates elsewhere.
-			left[#left + 1] = name_row(tostring(item.cocktail_name) .. ' ' .. localize('k_cocktail_suffix'), 0.5)
-		else
-			left[#left + 1] = name_row(Back(self.config.center):get_name(), 0.5)
-		end
-
 		if has_composition then
-			left[#left + 1] = {
-				n = G.UIT.R,
-				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.35 },
-				nodes = {
-					{ n = G.UIT.T, config = { text = localize('k_banpick_weekly_mix'), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-				},
-			}
-			-- The contained decks: each one's own name and effects.
-			for _, ckey in ipairs(item.cocktail) do
-				local ccenter = G.P_CENTERS[ckey]
-				if ccenter then
-					left[#left + 1] = name_row(Back(ccenter):get_name(), 0.38)
-					left[#left + 1] = desc_row(ccenter)
-				end
+			-- COMPACT on purpose: names only, no per-deck effect boxes. The full
+			-- breakdown lives in the cocktail badge's detail popup at the top of
+			-- the panel (see cocktail_badge_row) -- a tile-anchored tooltip tall
+			-- enough to hold three deck descriptions inevitably covers the tile
+			-- row it is pointing at, whatever the clamping does.
+			for _, row in ipairs(composition_rows(item)) do
+				left[#left + 1] = row
 			end
 		else
-			left[#left + 1] = desc_row(self.config.center)
+			left[#left + 1] = popup_name_row(Back(self.config.center):get_name(), 0.5)
+			left[#left + 1] = popup_desc_row(self.config.center)
 		end
 
 		if badges.nodes[1] then
@@ -699,23 +830,79 @@ local function deck_tile(item, banned, area, decorate)
 		-- inserting at 2 leaves nodes[1] = nil -- an array hole every ipairs
 		-- consumer stops at.
 		local popup_nodes = self.config.h_popup.nodes
-		table.insert(popup_nodes, math.min((self.T.x > G.ROOM.T.w * 0.4) and 2 or 1, #popup_nodes + 1), {
-			n = G.UIT.C,
-			config = { align = "cm", padding = 0.1 },
-			nodes = {
-				{
-					n = G.UIT.C,
-					config = { align = "cm", r = 0.1, colour = G.C.L_BLACK, padding = 0.1, outline = 1 },
-					nodes = {
-						{ n = G.UIT.R, config = { align = "tm" }, nodes = columns },
-					},
-				},
-			},
-		})
+		table.insert(popup_nodes, math.min((self.T.x > G.ROOM.T.w * 0.4) and 2 or 1, #popup_nodes + 1), popup_container(columns))
 
 		self.config.h_popup_config = self:align_h_popup()
 		Node.hover(self)
+		clamp_popup(self.children.h_popup, self)
 	end
+end
+
+-- Per-frame init for the cocktail badge element (config.func): installs a
+-- custom hover that shows the FULL composition -- each contained deck's name
+-- and effects -- as a popup growing DOWNWARD from the badge (vanilla
+-- on_demand_tooltip geometry for top-anchored elements). The badge sits at
+-- the top of the draft panel, so unlike a tile-anchored tooltip the detail
+-- has the whole panel height to grow into and can only cover tiles while the
+-- player is deliberately reading it, never while they are picking.
+G.FUNCS.mpapi_cocktail_badge_init = function(e)
+	if e._mp_badge_init then
+		return
+	end
+	e._mp_badge_init = true
+	e.states.collide.can = true
+	e.states.hover.can = true
+	e.hover = function(self)
+		local it = self.config.mp_comp_item
+		if not it then
+			return
+		end
+		self.config.h_popup = popup_container({
+			{ n = G.UIT.C, config = { align = "tm", padding = 0.05 }, nodes = composition_detail(it) },
+		})
+		self.config.h_popup_config = { align = 'bm', offset = { x = 0, y = 0.1 }, parent = self }
+		Node.hover(self)
+		clamp_popup(self.children.h_popup, self)
+	end
+	e.stop_hover = function(self)
+		Node.stop_hover(self)
+		self.config.h_popup = nil
+	end
+end
+
+-- The always-visible weekly-cocktail badge row: "<Name> Cocktail: Deck A +
+-- Deck B + Deck C" at a glance, full details on hover (see the init func
+-- above). Only built when the pool actually contains a composition item.
+local function cocktail_badge_row(comp_item)
+	local names = {}
+	for _, ckey in ipairs(comp_item.cocktail) do
+		local ccenter = G.P_CENTERS[ckey]
+		if ccenter then
+			names[#names + 1] = Back(ccenter):get_name()
+		end
+	end
+	local title = comp_item.cocktail_name
+			and (tostring(comp_item.cocktail_name) .. ' ' .. localize('k_cocktail_suffix'))
+		or localize('k_banpick_weekly_mix')
+	local label = title .. ': ' .. table.concat(names, ' + ')
+	return {
+		n = G.UIT.R,
+		config = { align = 'cm', padding = 0.04 },
+		nodes = {
+			{
+				n = G.UIT.C,
+				config = {
+					align = 'cm', padding = 0.08, r = 0.1,
+					colour = G.C.L_BLACK, outline = 1, outline_colour = G.C.UI.OUTLINE_LIGHT_TRANS,
+					func = 'mpapi_cocktail_badge_init',
+					mp_comp_item = comp_item,
+				},
+				nodes = {
+					{ n = G.UIT.T, config = { text = label, scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+				},
+			},
+		},
+	}
 end
 
 local function build_banpick_contents()
@@ -761,6 +948,15 @@ local function build_banpick_contents()
 	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.1 }, nodes = {
 		{ n = G.UIT.T, config = { text = detail, scale = 0.32, colour = G.C.UI.TEXT_LIGHT } },
 	} }
+
+	-- Weekly-cocktail badge (top of the panel, above the tiles): at-a-glance
+	-- composition, full per-deck details on hover.
+	for _, item in ipairs(state.pool) do
+		if type(item) == "table" and type(item.cocktail) == "table" then
+			rows[#rows + 1] = cocktail_badge_row(item)
+			break
+		end
+	end
 
 	local decorate = _config and _config.decorate_tile
 	local areas = {}
