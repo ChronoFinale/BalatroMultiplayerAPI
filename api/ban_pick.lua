@@ -51,6 +51,22 @@ local function item_key(item)
 	return item
 end
 
+-- Unique identity of a pool item WITHIN its pool. Tuple pools may repeat a deck
+-- at different stakes (the Botlatro rules allow up to 3), so identity must be
+-- key+stake, not key -- banning Red@White must not also ban Red@Gold. Plain
+-- string items keep their key as their id, so plain-key pools (Speedrun style)
+-- behave exactly as before. Ids travel opaquely through the ban wire format
+-- (the consumer ActionTypes' item_key parameter) and the selection UI.
+local function item_id(item)
+	if type(item) == "table" then
+		if item.stake ~= nil then
+			return item.key .. "@" .. tostring(item.stake)
+		end
+		return item.key
+	end
+	return item
+end
+
 -- Default candidate pool: a random sample of deck Back center KEYS.
 local function default_build_pool(size)
 	local keys = {}
@@ -110,9 +126,9 @@ local function current_actor_id(state)
 	return step and resolve_actor(state, step.actor)
 end
 
-local function item_for_key(state, key)
+local function item_for_id(state, id)
 	for _, item in ipairs(state.pool) do
-		if item_key(item) == key then
+		if item_id(item) == id then
 			return item
 		end
 	end
@@ -123,7 +139,7 @@ end
 local function compute_survivors(state)
 	local out = {}
 	for _, item in ipairs(state.pool) do
-		if not state.banned[item_key(item)] then
+		if not state.banned[item_id(item)] then
 			out[#out + 1] = item
 		end
 	end
@@ -137,7 +153,7 @@ end
 local function survivors_left(state)
 	local n = 0
 	for _, item in ipairs(state.pool) do
-		if not state.banned[item_key(item)] then
+		if not state.banned[item_id(item)] then
 			n = n + 1
 		end
 	end
@@ -204,7 +220,7 @@ local function selection_prune(list, state)
 	local out = {}
 	local cap = selection_needed(state)
 	for _, k in ipairs(list) do
-		if #out < cap and item_for_key(state, k) and not state.banned[k] then
+		if #out < cap and item_for_id(state, k) and not state.banned[k] then
 			out[#out + 1] = k
 		end
 	end
@@ -218,9 +234,9 @@ local function selection_randomize(state, rng)
 	rng = rng or math.random
 	local eligible = {}
 	for _, item in ipairs(state.pool) do
-		local k = item_key(item)
-		if not state.banned[k] then
-			eligible[#eligible + 1] = k
+		local id = item_id(item)
+		if not state.banned[id] then
+			eligible[#eligible + 1] = id
 		end
 	end
 	local out = {}
@@ -298,8 +314,8 @@ local function sync_selection_ui(state)
 	local action = step and step.action or "ban"
 	for _, area in ipairs(_areas) do
 		for _, card in ipairs(area.cards or {}) do
-			if card.mp_deck_key then
-				set_card_selected(card, selection_contains(_selected, card.mp_deck_key), action)
+			if card.mp_item_id then
+				set_card_selected(card, selection_contains(_selected, card.mp_item_id), action)
 			end
 		end
 	end
@@ -310,6 +326,7 @@ end
 -- sticker via card.sticker). BANNED tiles are debuffed.
 local function deck_tile(item, banned, area, decorate)
 	local key = item_key(item)
+	local id = item_id(item)
 	local center = G.P_CENTERS[key]
 	local card = Card(
 		area.T.x + area.T.w / 2,
@@ -327,7 +344,9 @@ local function deck_tile(item, banned, area, decorate)
 	if banned then
 		card.debuff = true
 	end
-	card.mp_deck_key = key
+	-- Identity is the item ID (key+stake for tuples): marking Red@White must not
+	-- raise or ban the Red@Gold tile sitting next to it.
+	card.mp_item_id = id
 
 	-- Clicking toggles the mark; nothing commits here (that's the Confirm button).
 	-- Off-turn and banned tiles don't react at all.
@@ -337,7 +356,7 @@ local function deck_tile(item, banned, area, decorate)
 		if banned or not state or not is_my_turn(lobby, state) then
 			return
 		end
-		if selection_toggle(_selected, key, selection_needed(state)) ~= "blocked" then
+		if selection_toggle(_selected, id, selection_needed(state)) ~= "blocked" then
 			sync_selection_ui(state)
 		end
 	end
@@ -466,7 +485,9 @@ local function build_banpick_contents()
 	local cur_area = nil
 	for i, item in ipairs(state.pool) do
 		if (i - 1) % PER_ROW == 0 then
-			cur_area = CardArea(0, 0, G.CARD_W * ROW_SCALE * PER_ROW, G.CARD_H * ROW_SCALE, {
+			-- Width beyond the cards' own footprint becomes even spacing between
+			-- tiles (CardArea spreads its cards across the full width).
+			cur_area = CardArea(0, 0, G.CARD_W * ROW_SCALE * PER_ROW * 1.15, G.CARD_H * ROW_SCALE, {
 				type = "joker",
 				highlight_limit = PER_ROW,
 				card_limit = PER_ROW,
@@ -481,7 +502,7 @@ local function build_banpick_contents()
 				},
 			}
 		end
-		deck_tile(item, state.banned[item_key(item)], cur_area, decorate)
+		deck_tile(item, state.banned[item_id(item)], cur_area, decorate)
 	end
 	-- Tiles are buttons, not hand cards: never draggable (click-holding one
 	-- would drag it around the panel and dismiss its hover popup mid-read;
@@ -590,24 +611,28 @@ end
 -- runs on the host). `seq` increments per applied action from 0; consumers that
 -- stash draft events server-side forward it as the dedup key. Consumer errors
 -- must never break a live draft, hence the pcall.
-local function fire_action_applied(s, from_player_id, action, deck_key)
+local function fire_action_applied(s, from_player_id, action, id)
 	if not _config or not _config.on_action_applied then
 		return
 	end
 	local seq = s.event_seq or 0
 	s.event_seq = seq + 1
-	local item = item_for_key(s, deck_key)
+	local item = item_for_id(s, id)
+	local key = item_key(item)
 	local stake = (type(item) == "table") and item.stake or nil
-	local ok, err = pcall(_config.on_action_applied, seq, from_player_id, action, deck_key, stake)
+	local ok, err = pcall(_config.on_action_applied, seq, from_player_id, action, key, stake)
 	if not ok then
 		MPAPI.sendWarnMessage('[banpick] on_action_applied errored: ' .. tostring(err))
 	end
 end
 
 -- Host authority: apply `from_player_id`'s action (ban or pick, per the current schedule
--- step) on `deck_key`. Returns true if it was legal and changed state (caller broadcasts).
+-- step) on the given item id. Returns true if it was legal and changed state (caller broadcasts).
 -- Exported as apply_ban for backward compatibility with existing consumer ActionTypes.
-local function apply_action(lobby, from_player_id, deck_key)
+-- `id` is the pool item's identity (item_id): the plain key for string pools,
+-- key@stake for tuple pools. It arrives opaquely through the consumers' ban
+-- ActionType (their item_key parameter), so consumers need no changes.
+local function apply_action(lobby, from_player_id, id)
 	local s = lobby._ban_pick
 	if not s or s.complete then
 		return false
@@ -615,16 +640,16 @@ local function apply_action(lobby, from_player_id, deck_key)
 	if current_actor_id(s) ~= from_player_id then
 		return false
 	end
-	if not item_for_key(s, deck_key) or s.banned[deck_key] then
+	if not item_for_id(s, id) or s.banned[id] then
 		return false
 	end
 
 	local step = current_step(s)
 	if step and step.action == "pick" then
 		-- The picked item wins; everything else is discarded.
-		s.survivors = { item_for_key(s, deck_key) }
+		s.survivors = { item_for_id(s, id) }
 		s.complete = true
-		fire_action_applied(s, from_player_id, "pick", deck_key)
+		fire_action_applied(s, from_player_id, "pick", id)
 		return true
 	end
 
@@ -632,9 +657,12 @@ local function apply_action(lobby, from_player_id, deck_key)
 	-- survivors-only consumers (GSS/WST), but lets a `keep=0` draft (nothing survives) use the
 	-- order itself as a result, e.g. SPDRN's All Deck mode drafting play order rather than
 	-- narrowing a pool (see BalatroMultiplayerSpeed/objects/gamemodes/all_deck.lua).
-	s.banned[deck_key] = true
-	s.ban_order[#s.ban_order + 1] = deck_key
-	fire_action_applied(s, from_player_id, "ban", deck_key)
+	-- Identity is the item id (key@stake for tuples), not the bare deck key.
+	-- ban_order stores the ITEM (same shape as survivors) so on_complete's two
+	-- args are consistently keys-or-{key,meta}-tables regardless of pool kind.
+	s.banned[id] = true
+	s.ban_order[#s.ban_order + 1] = item_for_id(s, id) or id
+	fire_action_applied(s, from_player_id, "ban", id)
 	s.sched_remaining = (s.sched_remaining or 1) - 1
 	if s.sched_remaining <= 0 then
 		s.sched_index = s.sched_index + 1
@@ -651,8 +679,10 @@ end
 
 BP.apply_ban = apply_action
 
--- Called by the action button (any client). Host applies directly; guest asks the host.
-function BP.request_ban(deck_key)
+-- Called by the Confirm flow (any client) with a pool item ID. Host applies
+-- directly; guest asks the host (the wire parameter stays named item_key for
+-- consumer ActionType compatibility -- it carries the item id opaquely).
+function BP.request_ban(id)
 	local lobby = MPAPI.get_current_lobby()
 	if not lobby then
 		return
@@ -663,7 +693,7 @@ function BP.request_ban(deck_key)
 	end
 
 	if lobby.is_host then
-		if apply_action(lobby, lobby.player_id, deck_key) then
+		if apply_action(lobby, lobby.player_id, id) then
 			BP.broadcast_state(lobby)
 			if _overlay then
 				_overlay:update()
@@ -675,7 +705,7 @@ function BP.request_ban(deck_key)
 		local action_type = MPAPI.ActionTypes[_config.ban_action]
 		if action_type then
 			-- order[1] is the host.
-			lobby:action(action_type):send(s.order[1], { item_key = deck_key })
+			lobby:action(action_type):send(s.order[1], { item_key = id })
 		end
 	end
 end
