@@ -43,6 +43,25 @@ local _areas = {}
 -- (so there is nothing to peek at or reroll-fish for).
 local _random_armed = false
 
+-- Broadcast staleness guard, scoped PER DRAFT. The host stamps every draft
+-- with a unique draft_id (host id + wall clock + counter) and every broadcast
+-- with a per-draft serial that rides ON the state (the host's own loopback
+-- replaces lobby._ban_pick, so the counter must travel with it). on_state:
+--   * a state whose draft_id is in the dead set (any COMPLETED or superseded
+--     draft) is dropped -- a late duplicate of an OLD final broadcast can
+--     neither render a stale board nor complete the NEW draft;
+--   * a new draft_id resets the serial watermark and is accepted (each host
+--     numbers its own drafts, so serials are NEVER compared across drafts --
+--     comparing them across hosts is exactly the cross-host wedge this design
+--     replaces);
+--   * within a draft, serials below the watermark drop; equal re-applies
+--     (reconnect refresh / QoS1 re-delivery of the CURRENT state).
+-- A state with no draft_id at all (older host build) is accepted as before.
+local _current_draft_id = nil
+local _last_serial = 0
+local _dead_drafts = {}
+local _draft_counter = 0
+
 -----------------------------
 -- Helpers
 -----------------------------
@@ -261,12 +280,35 @@ BP._selection = {
 	list = function()
 		return _selected
 	end,
-	-- test seams: is blind-random armed? / the live UI strings
+	-- test seams: is blind-random armed? / the live UI strings / inject fake
+	-- tile areas so sync_selection_ui is coverable headless
 	armed = function()
 		return _random_armed
 	end,
 	ui = function()
 		return _sel_ui
+	end,
+	set_areas = function(areas)
+		_areas = areas
+	end,
+}
+
+-- Test seam for the broadcast staleness guard (dev/test_banpick_events.lua).
+BP._serial = {
+	last = function()
+		return _last_serial
+	end,
+	current_draft = function()
+		return _current_draft_id
+	end,
+	is_dead = function(id)
+		return _dead_drafts[id] == true
+	end,
+	reset = function()
+		_current_draft_id = nil
+		_last_serial = 0
+		_dead_drafts = {}
+		_draft_counter = 0
 	end,
 }
 
@@ -344,6 +386,147 @@ local function sync_selection_ui(state)
 		end
 	end
 end
+
+-- Stake-column construction is split in two phases (exposed for tests via
+-- BP._stake_column). gather_stake_column runs EVERY fallible call -- the
+-- G.P_CENTER_POOLS lookups, loc_vars, get_stake_col and all localize calls --
+-- collecting plain data into a caller-owned collector; build_stake_column then
+-- assembles UI nodes from a completed gather with nothing left that can fail.
+-- The split matters because localize{type='descriptions'} CONSTRUCTS live
+-- DynaText/UIBox objects for {E:}-coded parts the moment it runs
+-- (SMODS.localize_box; they self-register into G.I.MOVEABLE at construction):
+-- each nodes table is parked in gathered.line_sets BEFORE the localize call
+-- that fills it, so a mid-gather failure leaves every constructed object
+-- reachable for release_stake_column -- never orphaned, drawing unparented at
+-- the screen origin.
+local function release_line_nodes(node)
+	if type(node) ~= "table" then
+		return
+	end
+	local obj = node.config and node.config.object
+	if obj and obj.remove then
+		obj:remove()
+	end
+	for _, child in ipairs(node.nodes or node) do
+		release_line_nodes(child)
+	end
+end
+
+local function release_stake_column(gathered)
+	for _, lines in ipairs(gathered.line_sets or {}) do
+		for _, line in ipairs(lines) do
+			release_line_nodes(line)
+		end
+	end
+end
+
+-- Mutates `gathered` ({ descs = {}, line_sets = {} }); sets gathered.ready
+-- only when every fallible call completed. Caller owns the collector so a
+-- thrown error still leaves the partial gather reachable for release.
+local function gather_stake_column(item, gathered)
+	local stakes_pool = G.P_CENTER_POOLS and G.P_CENTER_POOLS.Stake
+	local top = stakes_pool and stakes_pool[item.stake]
+	if not top then
+		return
+	end
+	gathered.name = localize({ type = 'name_text', set = 'Stake', key = top.key })
+	gathered.name_colour = get_stake_col(item.stake)
+	if item.stake > 2 then
+		gathered.also_applied = localize('k_also_applied')
+	end
+	local function gather_desc(i, drop_last)
+		local center = stakes_pool[i]
+		local res = {}
+		if center.loc_vars and type(center.loc_vars) == 'function' then
+			res = center:loc_vars() or {}
+		end
+		local lines = {}
+		gathered.line_sets[#gathered.line_sets + 1] = lines
+		localize({
+			type = 'descriptions',
+			key = res.key or center.key,
+			set = res.set or center.set,
+			nodes = lines,
+			vars = res.vars or {},
+		})
+		-- Previous stakes drop their trailing "applies all previous Stakes"
+		-- boilerplate line, exactly like run-info -- released here, while any
+		-- objects localize built into it are still reachable.
+		if drop_last and #lines > 1 then
+			release_line_nodes(lines[#lines])
+			lines[#lines] = nil
+		end
+		gathered.descs[#gathered.descs + 1] = { colour = get_stake_col(i), lines = lines }
+	end
+	gather_desc(item.stake, false)
+	for i = item.stake - 1, 2, -1 do
+		gather_desc(i, true)
+	end
+	gathered.ready = true
+end
+
+-- Pure assembly: table constructors over fully-gathered data only. descs[1] is
+-- the tile's own stake; the rest are the cumulative previous stakes (desc, then
+-- the "Also applied:" label after the first when present).
+local function build_stake_column(gathered)
+	local right = {}
+	local function chip_desc_row(colour, rows)
+		return {
+			n = G.UIT.R,
+			config = { align = "cm", padding = 0.03 },
+			nodes = {
+				{
+					n = G.UIT.C,
+					config = { align = "cm" },
+					nodes = {
+						{ n = G.UIT.C, config = { align = "cm", colour = colour, r = 0.1, minh = 0.3, minw = 0.3, emboss = 0.05 }, nodes = {} },
+						{ n = G.UIT.B, config = { w = 0.08, h = 0.08 } },
+					},
+				},
+				{ n = G.UIT.C, config = { align = "cm", padding = 0.03, colour = G.C.WHITE, r = 0.1, minh = 0.5, minw = 3.2 }, nodes = rows },
+			},
+		}
+	end
+	right[#right + 1] = {
+		n = G.UIT.R,
+		config = { align = "cm", r = 0.1, minw = 2.5, maxw = 4.2, minh = 0.4 },
+		nodes = {
+			{
+				n = G.UIT.T,
+				config = {
+					text = gathered.name,
+					scale = 0.38,
+					colour = gathered.name_colour,
+					shadow = true,
+				},
+			},
+		},
+	}
+	for idx, d in ipairs(gathered.descs) do
+		local rows = {}
+		for _, line in ipairs(d.lines) do
+			rows[#rows + 1] = { n = G.UIT.R, config = { align = "cm" }, nodes = line }
+		end
+		right[#right + 1] = chip_desc_row(d.colour, rows)
+		if idx == 1 and gathered.also_applied then
+			right[#right + 1] = {
+				n = G.UIT.R,
+				config = { align = "cm", padding = 0.03 },
+				nodes = {
+					{ n = G.UIT.T, config = { text = gathered.also_applied, scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+				},
+			}
+		end
+	end
+	return right
+end
+
+-- Exposed for the standalone test harness (dev/test_banpick_selection.lua).
+BP._stake_column = {
+	gather = gather_stake_column,
+	build = build_stake_column,
+	release = release_stake_column,
+}
 
 -- One deck tile: a card showing the deck's Back center. `item` may carry metadata; the
 -- consumer's decorate_tile(card, item) is called after emplace (e.g. to stamp a stake
@@ -489,90 +672,17 @@ local function deck_tile(item, banned, area, decorate)
 		-- G.UIDEF.current_stake pattern: the stake's name in its colour, its own
 		-- full description, then (stakes being cumulative) "Also applied:" with
 		-- every previous stake's modifier, chip-swatch + white box per stake.
-		-- pcall so a loc surprise degrades to a logged warning, never a dead hover.
+		-- Two-phase (gather -> build): every fallible call runs and completes
+		-- inside the pcall BEFORE any node accumulation, so a loc surprise
+		-- degrades to a logged warning with every already-constructed object
+		-- released -- never a dead hover, never orphaned drawables.
 		if type(item) == "table" and type(item.stake) == "number" then
-			local ok, err = pcall(function()
-				local stakes_pool = G.P_CENTER_POOLS and G.P_CENTER_POOLS.Stake
-				local top = stakes_pool and stakes_pool[item.stake]
-				if not top then
-					return
-				end
-
-				local function stake_desc_rows(i, drop_last)
-					local center = stakes_pool[i]
-					local res = {}
-					if center.loc_vars and type(center.loc_vars) == 'function' then
-						res = center:loc_vars() or {}
-					end
-					local lines = {}
-					localize({
-						type = 'descriptions',
-						key = res.key or center.key,
-						set = res.set or center.set,
-						nodes = lines,
-						vars = res.vars or {},
-					})
-					local rows = {}
-					for _, line in ipairs(lines) do
-						rows[#rows + 1] = { n = G.UIT.R, config = { align = "cm" }, nodes = line }
-					end
-					-- Previous stakes drop their trailing "applies all previous
-					-- Stakes" boilerplate line, exactly like run-info.
-					if drop_last and #rows > 1 then
-						rows[#rows] = nil
-					end
-					return rows
-				end
-
-				local function chip_desc_row(i, rows)
-					return {
-						n = G.UIT.R,
-						config = { align = "cm", padding = 0.03 },
-						nodes = {
-							{
-								n = G.UIT.C,
-								config = { align = "cm" },
-								nodes = {
-									{ n = G.UIT.C, config = { align = "cm", colour = get_stake_col(i), r = 0.1, minh = 0.3, minw = 0.3, emboss = 0.05 }, nodes = {} },
-									{ n = G.UIT.B, config = { w = 0.08, h = 0.08 } },
-								},
-							},
-							{ n = G.UIT.C, config = { align = "cm", padding = 0.03, colour = G.C.WHITE, r = 0.1, minh = 0.5, minw = 3.2 }, nodes = rows },
-						},
-					}
-				end
-
-				right[#right + 1] = {
-					n = G.UIT.R,
-					config = { align = "cm", r = 0.1, minw = 2.5, maxw = 4.2, minh = 0.4 },
-					nodes = {
-						{
-							n = G.UIT.T,
-							config = {
-								text = localize({ type = 'name_text', set = 'Stake', key = top.key }),
-								scale = 0.38,
-								colour = get_stake_col(item.stake),
-								shadow = true,
-							},
-						},
-					},
-				}
-				right[#right + 1] = chip_desc_row(item.stake, stake_desc_rows(item.stake, false))
-				if item.stake > 2 then
-					right[#right + 1] = {
-						n = G.UIT.R,
-						config = { align = "cm", padding = 0.03 },
-						nodes = {
-							{ n = G.UIT.T, config = { text = localize('k_also_applied'), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-						},
-					}
-					for i = item.stake - 1, 2, -1 do
-						right[#right + 1] = chip_desc_row(i, stake_desc_rows(i, true))
-					end
-				end
-			end)
-			if not ok then
-				right = {}
+			local gathered = { descs = {}, line_sets = {} }
+			local ok, err = pcall(gather_stake_column, item, gathered)
+			if ok and gathered.ready then
+				right = build_stake_column(gathered)
+			elseif not ok then
+				release_stake_column(gathered)
 				MPAPI.sendWarnMessage('[banpick] stake column failed: ' .. tostring(err))
 			end
 		end
@@ -584,7 +694,12 @@ local function deck_tile(item, banned, area, decorate)
 
 		self.config.h_popup = { n = G.UIT.C, config = { align = "cm", padding = 0.1 }, nodes = {} }
 
-		table.insert(self.config.h_popup.nodes, (self.T.x > G.ROOM.T.w * 0.4) and 2 or 1, {
+		-- The 2-or-1 position comes from the vanilla card_h_popup pattern where
+		-- nodes is pre-populated; here it is freshly EMPTY, so clamp the index or
+		-- inserting at 2 leaves nodes[1] = nil -- an array hole every ipairs
+		-- consumer stops at.
+		local popup_nodes = self.config.h_popup.nodes
+		table.insert(popup_nodes, math.min((self.T.x > G.ROOM.T.w * 0.4) and 2 or 1, #popup_nodes + 1), {
 			n = G.UIT.C,
 			config = { align = "cm", padding = 0.1 },
 			nodes = {
@@ -773,7 +888,18 @@ function BP.broadcast_state(lobby)
 	if not action_type then
 		return
 	end
-	lobby:action(action_type):broadcast({ state = lobby._ban_pick })
+	local s = lobby._ban_pick
+	-- Stamp the per-draft serial ON the state: the host's own broadcast loops
+	-- back through on_state and REPLACES lobby._ban_pick, so the counter must
+	-- ride the wire. Serials are scoped to this draft (draft_id resets the
+	-- watermark on every client), so a plain increment is correct.
+	if s then
+		s.serial = (s.serial or 0) + 1
+		-- The host IS the authority: advance its own watermark at stamp time so a
+		-- stale redelivery arriving before the loopback still drops.
+		_last_serial = s.serial
+	end
+	lobby:action(action_type):broadcast({ state = s })
 end
 
 -- Notify the consumer that an action was applied (host-side only -- apply_action
@@ -883,6 +1009,29 @@ function BP.on_state(lobby, state)
 	if not state then
 		return
 	end
+	-- Staleness guard, scoped by draft_id (see the module-local comment).
+	-- `<` (not `<=`) on the watermark keeps the reconnect refresh working -- a
+	-- QoS1 re-delivery of the CURRENT state applies again.
+	if state.draft_id then
+		if _dead_drafts[state.draft_id] then
+			return
+		end
+		if state.draft_id ~= _current_draft_id then
+			-- First sight of a new draft (possibly from a different host whose
+			-- serial counter is unrelated to anything seen before): supersede the
+			-- old draft and reset the watermark.
+			if _current_draft_id then
+				_dead_drafts[_current_draft_id] = true
+			end
+			_current_draft_id = state.draft_id
+			_last_serial = 0
+		end
+		local serial = state.serial or 0
+		if serial < _last_serial then
+			return
+		end
+		_last_serial = serial
+	end
 	lobby._ban_pick = state
 
 	-- Drop marks the broadcast invalidated (opponent banned them, cap shrank),
@@ -898,6 +1047,10 @@ function BP.on_state(lobby, state)
 
 	if state.complete and not _fired then
 		_fired = true
+		-- The draft is over: any further broadcast bearing this id is a duplicate.
+		if state.draft_id then
+			_dead_drafts[state.draft_id] = true
+		end
 		local cb = _on_complete
 		_on_complete = nil
 		if _overlay then
@@ -936,10 +1089,30 @@ function BP.start(lobby, config, on_complete)
 	_areas = {}
 	_random_armed = false
 
+	-- A new draft invalidates everything from the previous one. Clearing the
+	-- state matters on GUESTS (the host reassigns below anyway): otherwise the
+	-- old draft's COMPLETE state renders as a live board while the host is still
+	-- doing its async draft-pool fetch. Dead-marking the previous draft_id means
+	-- a late duplicate of the OLD final state cannot complete the NEW draft with
+	-- old survivors, regardless of which host numbered it.
+	lobby._ban_pick = nil
+	if _current_draft_id then
+		_dead_drafts[_current_draft_id] = true
+	end
+	_current_draft_id = nil
+	_last_serial = 0
+
 	if lobby.is_host then
 		local pool = (config.build_pool and config.build_pool()) or default_build_pool(config.pool_size)
 		local schedule = config.schedule or derive_schedule(config.pool_size or #pool, config.keep or 1)
+		-- Unique per draft: host id + wall clock + session counter. Guests scope
+		-- their staleness watermark to this id, so serials are never compared
+		-- across drafts or across hosts.
+		_draft_counter = _draft_counter + 1
+		local draft_id = tostring(lobby.player_id) .. '#' .. tostring(os.time()) .. '#' .. tostring(_draft_counter)
+		_current_draft_id = draft_id
 		lobby._ban_pick = {
+			draft_id = draft_id,
 			pool = pool,
 			banned = {},
 			ban_order = {},
@@ -1044,7 +1217,12 @@ G.FUNCS.mpapi_ban_pick_confirm = function(_e)
 		-- confirmed "random", never a revealed selection.
 		_random_armed = false
 		ids = selection_randomize(s)
-		if #ids == 0 then
+		-- A short roll (eligible survivors < the step's remaining count) commits
+		-- NOTHING: a partial batch would exhaust the pool mid-step and wedge the
+		-- draft with no legal action left. Disarm, warn, leave the step intact.
+		if #ids < needed then
+			MPAPI.sendWarnMessage('[banpick] blind random rolled ' .. tostring(#ids) .. ' of ' .. tostring(needed) .. ' needed; nothing committed')
+			sync_selection_ui(s)
 			return
 		end
 	else
@@ -1057,4 +1235,9 @@ G.FUNCS.mpapi_ban_pick_confirm = function(_e)
 	for _, id in ipairs(ids) do
 		BP.request_ban(id)
 	end
+	-- On the host every applied action re-renders (masking this); on a GUEST
+	-- request_ban only sends the wire message, so without an explicit sync the
+	-- tiles keep their raised state + Selected tags and the counter reads a full
+	-- N/N until the host's rebroadcast lands.
+	sync_selection_ui(s)
 end

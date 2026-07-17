@@ -147,6 +147,143 @@ LOBBY._ban_pick.first = 1
 check(BP.apply_ban(LOBBY, 'host', 'b_red') == true, 'plain-key pool applies without a hook')
 check(#events == 0, 'nothing fired')
 
+-- ── Staleness guard: stale/duplicate state broadcasts, scoped per draft ─────
+-- The host stamps each DRAFT with a unique draft_id and each broadcast with a
+-- per-draft serial; on_state drops serials below the watermark within a draft
+-- (equal re-applies: reconnect refresh), drops anything from a dead (completed
+-- or superseded) draft_id, and resets the watermark on a new draft_id -- so
+-- serials are never compared across drafts or hosts.
+print()
+print('-- serial guard: host broadcasts stamp increasing serials --')
+MPAPI.ActionTypes = { s = { key = 's' }, b = { key = 'b' } }
+local broadcasts = {}
+LOBBY.action = function(_self, _at)
+	return {
+		broadcast = function(_a, payload) broadcasts[#broadcasts + 1] = payload.state end,
+		send = function() end,
+	}
+end
+BP._serial.reset()
+start_draft()
+check(LOBBY._ban_pick.serial == 1, 'start broadcast stamps serial 1')
+check(type(LOBBY._ban_pick.draft_id) == 'string', 'host stamps a draft_id on the state')
+check(BP.apply_ban(LOBBY, 'host', 'b_red@1') == true, 'host ban applies')
+BP.broadcast_state(LOBBY)
+check(LOBBY._ban_pick.serial == 2, 'each broadcast increments the serial')
+check(#broadcasts == 2, 'both broadcasts went out')
+
+print()
+print('-- serial guard: host authority cannot be rewound by a stale redelivery --')
+local stale = {
+	draft_id = LOBBY._ban_pick.draft_id,
+	serial = 1,
+	pool = { { key = 'b_red', stake = 1 } },
+	banned = {},
+	order = { 'host', 'guest' },
+	first = 1,
+	schedule = { { actor = 1, action = 'ban', count = 1 } },
+	sched_index = 1,
+	sched_remaining = 1,
+	complete = false,
+}
+BP.on_state(LOBBY, stale)
+check(LOBBY._ban_pick.serial == 2, 'older serial ignored: state not replaced')
+check(LOBBY._ban_pick.banned['b_red@1'] == true, 'applied ban survives the stale redelivery')
+local dup = {
+	draft_id = LOBBY._ban_pick.draft_id,
+	serial = 2,
+	marker = true,
+	pool = { { key = 'b_red', stake = 1 } },
+	banned = {},
+	order = { 'host', 'guest' },
+	first = 1,
+	schedule = { { actor = 1, action = 'ban', count = 1 } },
+	sched_index = 1,
+	sched_remaining = 1,
+	complete = false,
+}
+BP.on_state(LOBBY, dup)
+check(LOBBY._ban_pick.marker == true, 'EQUAL serial re-applies (reconnect refresh / designed loopback)')
+
+print()
+print('-- serial guard: guest start clears stale state and blocks old-draft dups --')
+local GUEST = {
+	is_host = false,
+	player_id = 'guest',
+	get_players = function(_self)
+		return { { id = 'host' }, { id = 'guest' } }
+	end,
+}
+MPAPI.get_current_lobby = function()
+	return GUEST
+end
+local function make_state(serial, opts)
+	opts = opts or {}
+	return {
+		draft_id = opts.draft_id or 'hostA#1',
+		serial = serial,
+		pool = { 'b_red', 'b_blue' },
+		banned = opts.banned or {},
+		order = { 'host', 'guest' },
+		first = 1,
+		schedule = { { actor = 1, action = 'ban', count = 1 } },
+		sched_index = 1,
+		sched_remaining = 1,
+		complete = opts.complete or false,
+		survivors = opts.survivors,
+	}
+end
+local guest_cfg = {
+	schedule = { { actor = 1, action = 'ban', count = 1 } },
+	state_action = 's',
+	ban_action = 'b',
+	on_refresh = function() end,
+}
+BP._serial.reset()
+local completedA, completedB = nil, nil
+BP.start(GUEST, guest_cfg, function(s) completedA = s end)
+BP.on_state(GUEST, make_state(1))
+check(GUEST._ban_pick and GUEST._ban_pick.serial == 1, 'first broadcast of a draft is accepted')
+local old_final = make_state(5, { complete = true, survivors = { 'b_red' } })
+BP.on_state(GUEST, old_final)
+check(completedA ~= nil and completedA[1] == 'b_red', 'old draft completes normally')
+check(GUEST._ban_pick == old_final, 'old final state attached to the lobby')
+
+BP.start(GUEST, guest_cfg, function(s) completedB = s end)
+check(GUEST._ban_pick == nil, 'guest BP.start clears the previous draft state')
+check(BP.is_active() == false, 'no live board while the host is still fetching the pool')
+BP.on_state(GUEST, old_final)
+check(GUEST._ban_pick == nil, 'late duplicate of the OLD final broadcast is ignored')
+check(completedB == nil, 'old survivors do NOT complete the new draft')
+BP.on_state(GUEST, make_state(1, { draft_id = 'hostA#2' }))
+check(GUEST._ban_pick ~= nil and GUEST._ban_pick.serial == 1, "the new draft's first broadcast (new draft_id) is accepted")
+BP.on_state(GUEST, make_state(3, { draft_id = 'hostA#2' }))
+BP.on_state(GUEST, make_state(2, { draft_id = 'hostA#2' }))
+check(GUEST._ban_pick.serial == 3, 'out-of-order older serial ignored mid-draft')
+local legacy = { serial = nil, pool = { 'b_red' }, banned = {}, order = { 'host', 'guest' }, first = 1, schedule = { { actor = 1, action = 'ban', count = 1 } }, sched_index = 1, sched_remaining = 1, complete = false }
+BP.on_state(GUEST, legacy)
+check(GUEST._ban_pick == legacy, 'a state with NO draft_id (older host build) is accepted as before')
+
+-- ── REGRESSION: fresh host after a long-running previous host ───────────────
+-- The verifier's cross-host wedge: a guest who tracked host A up to serial 8
+-- must accept host B's brand-new draft whose serials start from 1. Serials are
+-- per-draft; only draft_id decides what is stale.
+print()
+print('-- regression: new host with fresh (lower) serials is never wedged --')
+BP._serial.reset()
+local completedC = nil
+BP.start(GUEST, guest_cfg, function(x) completedC = x end)
+for i = 1, 8 do
+	BP.on_state(GUEST, make_state(i, { draft_id = 'hostA#7', complete = (i == 8), survivors = { 'b_red' } }))
+end
+check(completedC ~= nil, 'match 1 against host A completed at serial 8')
+BP.start(GUEST, guest_cfg, function() end)
+BP.on_state(GUEST, make_state(1, { draft_id = 'hostB#1' }))
+check(GUEST._ban_pick ~= nil and GUEST._ban_pick.serial == 1,
+	"host B's serial-1 broadcast is accepted (per-draft watermark, no cross-host floor)")
+BP.on_state(GUEST, make_state(8, { draft_id = 'hostA#7', complete = true, survivors = { 'b_red' } }))
+check(GUEST._ban_pick.draft_id == 'hostB#1', "a dup from dead host-A draft cannot displace host B's live draft")
+
 -- ── Summary ─────────────────────────────────────────────────────────────────
 print()
 if failures == 0 then
