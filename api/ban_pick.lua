@@ -1007,49 +1007,49 @@ local function build_banpick_contents()
 	_areas = areas
 	sync_selection_ui(state)
 
-	-- Selected counter + Confirm + Random (reroll), only on our turn. The counter
-	-- text updates live via ref_table; both buttons enable themselves per frame
-	-- through their check funcs.
-	if my_turn then
-		rows[#rows + 1] = { n = G.UIT.R, config = { minh = 0.4 } }
-		rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
-			{ n = G.UIT.T, config = { text = localize('k_banpick_selected') .. ' ', scale = 0.35, colour = G.C.UI.TEXT_LIGHT } },
-			{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'count_text', scale = 0.35, colour = G.C.UI.TEXT_LIGHT } },
-		} }
-		-- `button` must be present at definition time: UIElement:set_values only arms
-		-- states.click.can for nodes that HAVE config.button when the UIBox is built.
-		-- The per-frame check then gates it by nulling config.button while not ready
-		-- (the vanilla can_play pattern). The Random button is deliberately NOT
-		-- one_press: pressing it again re-rolls.
-		rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.06 }, nodes = {
-			{
-				n = G.UIT.C,
-				config = {
-					align = 'cm', minw = 3.2, minh = 0.7, r = 0.1, padding = 0.08,
-					shadow = true, hover = true, colour = G.C.UI.BACKGROUND_INACTIVE,
-					button = 'mpapi_ban_pick_confirm', one_press = true,
-					func = 'mpapi_ban_pick_confirm_check',
-				},
-				nodes = {
-					{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'confirm_text', scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-				},
+	-- Selected counter + Confirm + Random (reroll). ALWAYS rendered -- on the
+	-- opponent's turn the check funcs grey both buttons out (inactive colour,
+	-- config.button nulled) rather than the row vanishing, so the panel keeps
+	-- one stable layout instead of jumping every turn flip. The counter text
+	-- updates live via ref_table.
+	rows[#rows + 1] = { n = G.UIT.R, config = { minh = 0.4 } }
+	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
+		{ n = G.UIT.T, config = { text = localize('k_banpick_selected') .. ' ', scale = 0.35, colour = G.C.UI.TEXT_LIGHT } },
+		{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'count_text', scale = 0.35, colour = G.C.UI.TEXT_LIGHT } },
+	} }
+	-- `button` must be present at definition time: UIElement:set_values only arms
+	-- states.click.can for nodes that HAVE config.button when the UIBox is built.
+	-- The per-frame check then gates it by nulling config.button while not ready
+	-- (the vanilla can_play pattern). The Random button is deliberately NOT
+	-- one_press: pressing it again re-rolls.
+	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.06 }, nodes = {
+		{
+			n = G.UIT.C,
+			config = {
+				align = 'cm', minw = 3.2, minh = 0.7, r = 0.1, padding = 0.08,
+				shadow = true, hover = true, colour = G.C.UI.BACKGROUND_INACTIVE,
+				button = 'mpapi_ban_pick_confirm', one_press = true,
+				func = 'mpapi_ban_pick_confirm_check',
 			},
-			{ n = G.UIT.C, config = { minw = 0.25 } },
-			{
-				n = G.UIT.C,
-				config = {
-					-- Wide enough for its longest live label ("Cancel Random").
-					align = 'cm', minw = 2.6, minh = 0.7, r = 0.1, padding = 0.08,
-					shadow = true, hover = true, colour = G.C.UI.BACKGROUND_INACTIVE,
-					button = 'mpapi_ban_pick_random',
-					func = 'mpapi_ban_pick_random_check',
-				},
-				nodes = {
-					{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'random_text', scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-				},
+			nodes = {
+				{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'confirm_text', scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
 			},
-		} }
-	end
+		},
+		{ n = G.UIT.C, config = { minw = 0.25 } },
+		{
+			n = G.UIT.C,
+			config = {
+				-- Wide enough for its longest live label ("Cancel Random").
+				align = 'cm', minw = 2.6, minh = 0.7, r = 0.1, padding = 0.08,
+				shadow = true, hover = true, colour = G.C.UI.BACKGROUND_INACTIVE,
+				button = 'mpapi_ban_pick_random',
+				func = 'mpapi_ban_pick_random_check',
+			},
+			nodes = {
+				{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'random_text', scale = 0.42, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+			},
+		},
+	} }
 
 	return rows
 end
