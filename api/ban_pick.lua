@@ -745,6 +745,12 @@ local function deck_tile(item, banned, area, decorate)
 	-- raise or ban the Red@Gold tile sitting next to it.
 	card.mp_item_id = id
 
+	-- Tiles are buttons, not hand cards: Card defaults to draggable, and
+	-- click-holding a tile let the player drag it around the panel while its
+	-- hover popup vanished mid-read. Selection raising is the only movement
+	-- these ever do.
+	card.states.drag.can = false
+
 	-- Clicking toggles the mark; nothing commits here (that's the Confirm button).
 	-- Off-turn and banned tiles don't react at all.
 	function card:click()
