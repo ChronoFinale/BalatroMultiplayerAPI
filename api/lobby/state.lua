@@ -121,8 +121,12 @@ L.create_object = function(opts)
 		end
 		self._api:leave_lobby(self._connection.jwt_token, self.code, function(err, data)
 			if err then
+				-- A leave must always COMPLETE locally: every teardown consumer
+				-- (view reset, match handles, ban-pick) hangs off DISCONNECTED,
+				-- so a failed round-trip still tears down client-side. The lobby
+				-- may linger server-side until its own cleanup -- log and accept.
+				MPAPI.sendWarnMessage('leave_lobby round-trip failed (' .. tostring(err) .. '); completing the leave locally')
 				self:_fire(MPAPI.LobbyEvent.ERROR, err)
-				return
 			end
 			if data and data.token then
 				self._connection.jwt_token = data.token
