@@ -399,10 +399,11 @@ local function deck_tile(item, banned, area, decorate)
 			badges.nodes.mod_set = nil
 		end
 
-		-- Name row + description box for one Back center (the tile itself, and --
-		-- when the item carries a cocktail composition -- each contained deck).
-		local function back_section(center, name_scale)
-			local b = Back(center)
+		-- LAZY builders: DynaText/UIBox objects register themselves globally the
+		-- moment they are constructed, so anything built and then NOT placed in the
+		-- popup would still be drawn -- unparented, at the screen origin (the
+		-- garbled text-over-the-status-panel bug). Only ever construct on use.
+		local function name_row(text, name_scale)
 			return {
 				n = G.UIT.R,
 				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
@@ -411,14 +412,17 @@ local function deck_tile(item, banned, area, decorate)
 						n = G.UIT.O,
 						config = {
 							object = DynaText({
-								string = b:get_name(),
+								string = text,
 								maxw = 4,
 								colours = { G.C.WHITE }, shadow = true, bump = true, scale = name_scale, pop_in = 0, silent = true,
 							}),
 						},
 					},
 				},
-			}, {
+			}
+		end
+		local function desc_row(center)
+			return {
 				n = G.UIT.R,
 				config = {
 					align = "cm",
@@ -429,7 +433,7 @@ local function deck_tile(item, banned, area, decorate)
 						n = G.UIT.O,
 						config = {
 							object = UIBox({
-								definition = b:generate_UI(),
+								definition = Back(center):generate_UI(),
 								config = { offset = { x = 0, y = 0 } },
 							}),
 						},
@@ -438,31 +442,144 @@ local function deck_tile(item, banned, area, decorate)
 			}
 		end
 
-		local inner = {}
-		local name_row, desc_row = back_section(self.config.center, 0.5)
-		inner[#inner + 1] = name_row
-		inner[#inner + 1] = desc_row
+		-- Two columns: deck info (left) and, for tuple pools, stake info (right).
+		local left = {}
+		local right = {}
+		local has_composition = type(item) == "table" and type(item.cocktail) == "table"
 
-		-- Contained decks (e.g. the weekly cocktail composition, delivered as
-		-- item.cocktail = { deck_key, ... }): render each contained deck's own name
-		-- and effects under the tile's description.
-		if type(item) == "table" and type(item.cocktail) == "table" then
+		if has_composition and item.cocktail_name then
+			-- A named composition (the weekly cocktail) presents under its OWN title:
+			-- the server-delivered short name (a proper noun, shown verbatim) plus the
+			-- LOCALIZED "Cocktail" suffix -- so "Casjb" renders as "Casjb Cocktail" in
+			-- English and the suffix translates elsewhere.
+			left[#left + 1] = name_row(tostring(item.cocktail_name) .. ' ' .. localize('k_cocktail_suffix'), 0.5)
+		else
+			left[#left + 1] = name_row(Back(self.config.center):get_name(), 0.5)
+		end
+
+		if has_composition then
+			left[#left + 1] = {
+				n = G.UIT.R,
+				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.35 },
+				nodes = {
+					{ n = G.UIT.T, config = { text = localize('k_banpick_weekly_mix'), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+				},
+			}
+			-- The contained decks: each one's own name and effects.
 			for _, ckey in ipairs(item.cocktail) do
 				local ccenter = G.P_CENTERS[ckey]
 				if ccenter then
-					local cname, cdesc = back_section(ccenter, 0.38)
-					inner[#inner + 1] = cname
-					inner[#inner + 1] = cdesc
+					left[#left + 1] = name_row(Back(ccenter):get_name(), 0.38)
+					left[#left + 1] = desc_row(ccenter)
 				end
 			end
+		else
+			left[#left + 1] = desc_row(self.config.center)
 		end
 
 		if badges.nodes[1] then
-			inner[#inner + 1] = {
+			left[#left + 1] = {
 				n = G.UIT.R,
 				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
 				nodes = { badges },
 			}
+		end
+
+		-- Stake column (right of the deck info), built on the vanilla
+		-- G.UIDEF.current_stake pattern: the stake's name in its colour, its own
+		-- full description, then (stakes being cumulative) "Also applied:" with
+		-- every previous stake's modifier, chip-swatch + white box per stake.
+		-- pcall so a loc surprise degrades to a logged warning, never a dead hover.
+		if type(item) == "table" and type(item.stake) == "number" then
+			local ok, err = pcall(function()
+				local stakes_pool = G.P_CENTER_POOLS and G.P_CENTER_POOLS.Stake
+				local top = stakes_pool and stakes_pool[item.stake]
+				if not top then
+					return
+				end
+
+				local function stake_desc_rows(i, drop_last)
+					local center = stakes_pool[i]
+					local res = {}
+					if center.loc_vars and type(center.loc_vars) == 'function' then
+						res = center:loc_vars() or {}
+					end
+					local lines = {}
+					localize({
+						type = 'descriptions',
+						key = res.key or center.key,
+						set = res.set or center.set,
+						nodes = lines,
+						vars = res.vars or {},
+					})
+					local rows = {}
+					for _, line in ipairs(lines) do
+						rows[#rows + 1] = { n = G.UIT.R, config = { align = "cm" }, nodes = line }
+					end
+					-- Previous stakes drop their trailing "applies all previous
+					-- Stakes" boilerplate line, exactly like run-info.
+					if drop_last and #rows > 1 then
+						rows[#rows] = nil
+					end
+					return rows
+				end
+
+				local function chip_desc_row(i, rows)
+					return {
+						n = G.UIT.R,
+						config = { align = "cm", padding = 0.03 },
+						nodes = {
+							{
+								n = G.UIT.C,
+								config = { align = "cm" },
+								nodes = {
+									{ n = G.UIT.C, config = { align = "cm", colour = get_stake_col(i), r = 0.1, minh = 0.3, minw = 0.3, emboss = 0.05 }, nodes = {} },
+									{ n = G.UIT.B, config = { w = 0.08, h = 0.08 } },
+								},
+							},
+							{ n = G.UIT.C, config = { align = "cm", padding = 0.03, colour = G.C.WHITE, r = 0.1, minh = 0.5, minw = 3.2 }, nodes = rows },
+						},
+					}
+				end
+
+				right[#right + 1] = {
+					n = G.UIT.R,
+					config = { align = "cm", r = 0.1, minw = 2.5, maxw = 4.2, minh = 0.4 },
+					nodes = {
+						{
+							n = G.UIT.T,
+							config = {
+								text = localize({ type = 'name_text', set = 'Stake', key = top.key }),
+								scale = 0.38,
+								colour = get_stake_col(item.stake),
+								shadow = true,
+							},
+						},
+					},
+				}
+				right[#right + 1] = chip_desc_row(item.stake, stake_desc_rows(item.stake, false))
+				if item.stake > 2 then
+					right[#right + 1] = {
+						n = G.UIT.R,
+						config = { align = "cm", padding = 0.03 },
+						nodes = {
+							{ n = G.UIT.T, config = { text = localize('k_also_applied'), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+						},
+					}
+					for i = item.stake - 1, 2, -1 do
+						right[#right + 1] = chip_desc_row(i, stake_desc_rows(i, true))
+					end
+				end
+			end)
+			if not ok then
+				right = {}
+				MPAPI.sendWarnMessage('[banpick] stake column failed: ' .. tostring(err))
+			end
+		end
+
+		local columns = { { n = G.UIT.C, config = { align = "tm", padding = 0.05 }, nodes = left } }
+		if right[1] then
+			columns[#columns + 1] = { n = G.UIT.C, config = { align = "tm", padding = 0.05 }, nodes = right }
 		end
 
 		self.config.h_popup = { n = G.UIT.C, config = { align = "cm", padding = 0.1 }, nodes = {} }
@@ -474,7 +591,9 @@ local function deck_tile(item, banned, area, decorate)
 				{
 					n = G.UIT.C,
 					config = { align = "cm", r = 0.1, colour = G.C.L_BLACK, padding = 0.1, outline = 1 },
-					nodes = inner,
+					nodes = {
+						{ n = G.UIT.R, config = { align = "tm" }, nodes = columns },
+					},
 				},
 			},
 		})

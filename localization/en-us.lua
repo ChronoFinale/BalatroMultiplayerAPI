@@ -119,6 +119,8 @@ return {
 			k_banpick_confirm_random = 'Confirm Random',
 			k_banpick_random = 'Random',
 			k_banpick_cancel_random = 'Cancel Random',
+			k_banpick_weekly_mix = 'A rotating 3-deck mix',
+			k_cocktail_suffix = 'Cocktail',
 		},
 	},
 	descriptions = {
