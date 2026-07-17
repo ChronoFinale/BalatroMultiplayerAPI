@@ -586,6 +586,24 @@ function BP.broadcast_state(lobby)
 	lobby:action(action_type):broadcast({ state = lobby._ban_pick })
 end
 
+-- Notify the consumer that an action was applied (host-side only -- apply_action
+-- runs on the host). `seq` increments per applied action from 0; consumers that
+-- stash draft events server-side forward it as the dedup key. Consumer errors
+-- must never break a live draft, hence the pcall.
+local function fire_action_applied(s, from_player_id, action, deck_key)
+	if not _config or not _config.on_action_applied then
+		return
+	end
+	local seq = s.event_seq or 0
+	s.event_seq = seq + 1
+	local item = item_for_key(s, deck_key)
+	local stake = (type(item) == "table") and item.stake or nil
+	local ok, err = pcall(_config.on_action_applied, seq, from_player_id, action, deck_key, stake)
+	if not ok then
+		MPAPI.sendWarnMessage('[banpick] on_action_applied errored: ' .. tostring(err))
+	end
+end
+
 -- Host authority: apply `from_player_id`'s action (ban or pick, per the current schedule
 -- step) on `deck_key`. Returns true if it was legal and changed state (caller broadcasts).
 -- Exported as apply_ban for backward compatibility with existing consumer ActionTypes.
@@ -606,6 +624,7 @@ local function apply_action(lobby, from_player_id, deck_key)
 		-- The picked item wins; everything else is discarded.
 		s.survivors = { item_for_key(s, deck_key) }
 		s.complete = true
+		fire_action_applied(s, from_player_id, "pick", deck_key)
 		return true
 	end
 
@@ -615,6 +634,7 @@ local function apply_action(lobby, from_player_id, deck_key)
 	-- narrowing a pool (see BalatroMultiplayerSpeed/objects/gamemodes/all_deck.lua).
 	s.banned[deck_key] = true
 	s.ban_order[#s.ban_order + 1] = deck_key
+	fire_action_applied(s, from_player_id, "ban", deck_key)
 	s.sched_remaining = (s.sched_remaining or 1) - 1
 	if s.sched_remaining <= 0 then
 		s.sched_index = s.sched_index + 1
@@ -702,6 +722,8 @@ end
 --   build_pool, decorate_tile,       -- item pool + per-tile decoration hooks
 --   state_action, ban_action,        -- consumer ActionType keys
 --   on_refresh,                      -- inline render callback (else self-managed overlay)
+--   on_action_applied,               -- host-only: fn(seq, player_id, 'ban'|'pick', key, stake)
+--                                    -- fired after every applied action (draft-event stash)
 -- }. on_complete(survivors, ban_order) receives the surviving items (keys or {key,meta}
 -- tables) plus the full ban sequence (also keys/tables) -- useful for a `keep=0` draft, where
 -- `survivors` is always empty and the ban order itself is the meaningful result.
