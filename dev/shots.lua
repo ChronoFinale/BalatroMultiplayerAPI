@@ -141,5 +141,22 @@ return function(H)
 				done()
 			end,
 		},
+		{
+			name = '09-queue-guard-overlay',
+			expect = "Guard overlay: 'Matchmaking In Progress' title, description saying you can't start a run or join a lobby while searching, and three buttons -- 'Leave Queue & Continue', 'Leave Queue', 'Stay Queued'. No ERROR text.",
+			region = { x = 0.25, y = 0.2, w = 0.5, h = 0.6 },
+			-- Only exists once the queue-guard feature is present (PR #7 line).
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				G.SETTINGS.paused = true
+				MPAPI.queue_guard_overlay:as_overlay()
+				done()
+			end,
+			teardown = function()
+				G.SETTINGS.paused = false
+			end,
+		},
 	}
 end
