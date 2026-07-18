@@ -158,5 +158,117 @@ return function(H)
 				G.SETTINGS.paused = false
 			end,
 		},
+		-- ── Queue-guard matrix: the guard fired from each REAL entry point, and
+		-- what each overlay button leads to. All fake the queued state via
+		-- H.fake_queue (no server needed); every trigger goes through the real
+		-- wrapped G.FUNCS path a player's click takes.
+		{
+			name = '10-guard-from-newrun-menu',
+			expect = "Guard overlay ('Matchmaking In Progress', three buttons) REPLACING the New Run setup overlay (as_overlay swaps, it does not stack) -- the run did NOT start; backdrop is the main menu.",
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				G.FUNCS.setup_run({ config = {} })
+				local revert = H.fake_queue()
+				G.FUNCS.start_run(nil, nil)
+				H._guard_revert = revert
+				done()
+			end,
+			teardown = function()
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
+			end,
+		},
+		{
+			name = '11-guard-from-challenges-menu',
+			expect = "Guard overlay replacing the challenge list the same way -- starting a challenge while queued is blocked identically to a normal run.",
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				G.FUNCS.challenge_list({ config = {} })
+				local revert = H.fake_queue()
+				G.FUNCS.start_run(nil, nil)
+				H._guard_revert = revert
+				done()
+			end,
+			teardown = function()
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
+			end,
+		},
+		{
+			name = '12-guard-then-stay-queued',
+			expect = "After pressing Stay Queued: overlay gone, back at the plain main menu, search still active (the fake queue was not left) -- nothing else changed.",
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				local revert = H.fake_queue()
+				G.SETTINGS.paused = true
+				MPAPI.queue_guard_overlay:as_overlay()
+				G.FUNCS.exit_overlay_menu()
+				H._still_queued = MPAPI.matchmaking.is_queued()
+				H._guard_revert = revert
+				done()
+			end,
+			teardown = function()
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
+			end,
+		},
+		{
+			name = '13-guard-then-leave-queue',
+			expect = "After pressing Leave Queue: overlay gone, back at the plain main menu, search ended (no queue status anywhere). No run started.",
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				local revert = H.fake_queue()
+				G.SETTINGS.paused = true
+				MPAPI.queue_guard_overlay:as_overlay()
+				G.FUNCS.mpapi_queue_guard_leave(nil)
+				H._guard_revert = revert
+				done()
+			end,
+			teardown = function()
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
+			end,
+		},
+		-- LAST on purpose (names sort the run order): Leave Queue & Continue
+		-- actually starts the blocked run, which tears down the menu the other
+		-- scenarios need. The suite quits right after this capture.
+		{
+			name = '14-guard-then-leave-and-continue',
+			expect = "After pressing Leave Queue & Continue from the New Run guard: the queue is left AND the run actually starts -- captured at the blind-select screen of a fresh run.",
+			settle = 6.0,
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				G.FUNCS.setup_run({ config = {} })
+				local revert = H.fake_queue()
+				G.FUNCS.start_run(nil, nil)
+				G.FUNCS.mpapi_queue_guard_leave_play(nil)
+				H._guard_revert = revert
+				done()
+			end,
+			teardown = function()
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
+			end,
+		},
 	}
 end
