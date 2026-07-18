@@ -96,6 +96,34 @@ return function(H)
 			end,
 		},
 		{
+			name = '05b-pick-phase',
+			expect = "PICK step between the last 2: seven tiles debuffed, two live; green 'Your turn: pick your deck'; the clicked survivor raised with a GREEN Selected tag; counter 'Selected: 1/1'; GREEN Confirm Pick button.",
+			region = PANEL_REGION,
+			setup = function(done)
+				-- Ranked-shaped 1-3-3 alternating bans, then the pick. Both
+				-- sides' bans applied through the host-authoritative
+				-- apply_ban (the exact path real remote bans take).
+				local lobby = H.start_draft(PLAIN_POOL, {
+					{ actor = 2, action = 'ban', count = 1 },
+					{ actor = 1, action = 'ban', count = 3 },
+					{ actor = 2, action = 'ban', count = 3 },
+					{ actor = 1, action = 'pick', count = 1 },
+				}, 1)
+				local order = lobby._ban_pick.order
+				MPAPI.BanPick.apply_ban(lobby, order[2], 'b_blue')
+				for _, k in ipairs({ 'b_yellow', 'b_green', 'b_black' }) do
+					MPAPI.BanPick.apply_ban(lobby, order[1], k)
+				end
+				for _, k in ipairs({ 'b_magic', 'b_nebula', 'b_ghost' }) do
+					MPAPI.BanPick.apply_ban(lobby, order[2], k)
+				end
+				MPAPI.BanPick.on_state(lobby, lobby._ban_pick)
+				local t = H.find_tile('b_red')
+				if t then t:click() end
+				done()
+			end,
+		},
+		{
 			name = '06-tuple-hover-stake-column',
 			expect = "Hover popup over the 7th tile: deck name + effects on the left, stake column on the right (stake name in its colour, description, 'Also applied' list). Popup fully on screen.",
 			region = HOVER_REGION,
@@ -150,12 +178,17 @@ return function(H)
 				return not MPAPI.queue_guard_overlay
 			end,
 			setup = function(done)
+				H._guard_revert = H.fake_queue()
 				G.SETTINGS.paused = true
 				MPAPI.queue_guard_overlay:as_overlay()
 				done()
 			end,
 			teardown = function()
 				G.SETTINGS.paused = false
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
 			end,
 		},
 		-- ── Queue-guard matrix: the guard fired from each REAL entry point, and
@@ -163,16 +196,33 @@ return function(H)
 		-- H.fake_queue (no server needed); every trigger goes through the real
 		-- wrapped G.FUNCS path a player's click takes.
 		{
-			name = '10-guard-from-newrun-menu',
-			expect = "Guard overlay ('Matchmaking In Progress', three buttons) REPLACING the New Run setup overlay (as_overlay swaps, it does not stack) -- the run did NOT start; backdrop is the main menu.",
+			name = '10a-newrun-setup-while-queued',
+			expect = "The New Run setup screen open while a search runs: 'Queueing m:ss' visible in the connection status panel (left). This is the moment BEFORE clicking Play -- no guard yet.",
 			skip = function()
 				return not MPAPI.queue_guard_overlay
 			end,
 			setup = function(done)
+				H._guard_revert = H.fake_queue()
 				G.FUNCS.setup_run({ config = {} })
-				local revert = H.fake_queue()
+				done()
+			end,
+			teardown = function()
+				if H._guard_revert then
+					H._guard_revert()
+					H._guard_revert = nil
+				end
+			end,
+		},
+		{
+			name = '10b-guard-replaces-setup',
+			expect = "After clicking Play from that setup screen: the guard REPLACES the setup overlay (as_overlay swaps, it does not stack) -- the run did NOT start, 'Queueing m:ss' still ticking in the status panel.",
+			skip = function()
+				return not MPAPI.queue_guard_overlay
+			end,
+			setup = function(done)
+				H._guard_revert = H.fake_queue()
+				G.FUNCS.setup_run({ config = {} })
 				G.FUNCS.start_run(nil, nil)
-				H._guard_revert = revert
 				done()
 			end,
 			teardown = function()
@@ -204,7 +254,7 @@ return function(H)
 		},
 		{
 			name = '12-guard-then-stay-queued',
-			expect = "After pressing Stay Queued: overlay gone, back at the plain main menu, search still active (the fake queue was not left) -- nothing else changed.",
+			expect = "After pressing Stay Queued: overlay gone, back at the main menu, and 'Queueing m:ss' STILL ticking in the connection status -- the search survived.",
 			skip = function()
 				return not MPAPI.queue_guard_overlay
 			end,
@@ -226,7 +276,7 @@ return function(H)
 		},
 		{
 			name = '13-guard-then-leave-queue',
-			expect = "After pressing Leave Queue: overlay gone, back at the plain main menu, search ended (no queue status anywhere). No run started.",
+			expect = "After pressing Leave Queue: overlay gone, menu unpaused, and the 'Queueing' status GONE from the connection panel -- the search ended. No run started.",
 			skip = function()
 				return not MPAPI.queue_guard_overlay
 			end,
