@@ -250,13 +250,26 @@ return function(H)
 		-- scenarios need. The suite quits right after this capture.
 		{
 			name = '14-guard-then-leave-and-continue',
-			expect = "After pressing Leave Queue & Continue from the New Run guard: the queue is left AND the run actually starts -- captured at the blind-select screen of a fresh run.",
+			expect = "After pressing Leave Queue & Continue from the New Run guard: the queue is left AND the run actually starts -- captured at the blind-select screen of a fresh RED DECK run (deck forced for determinism; an interaction-on-start deck like Orange would land mid pack-picker instead).",
 			settle = 6.0,
 			skip = function()
 				return not MPAPI.queue_guard_overlay
 			end,
 			setup = function(done)
+				-- Force a passive deck: the run starts on the profile's
+				-- remembered deck, and e.g. Orange opens a mandatory pack
+				-- picker at run start -- the capture would land mid-pack
+				-- instead of at blind select. Restored in teardown.
+				local mem = G.PROFILES[G.SETTINGS.profile].MEMORY
+				H._mem_deck, H._mem_stake = mem.deck, mem.stake
+				mem.deck, mem.stake = 'Red Deck', 1
 				G.FUNCS.setup_run({ config = {} })
+				-- MEMORY only feeds the New Run tab; with a saved run present the
+				-- setup opens on Continue, which sets viewed_back from the SAVE.
+				-- Game:start_run gives viewed_back top precedence for a fresh
+				-- run (game.lua:2037), so force it directly.
+				G.GAME.viewed_back = Back(get_deck_from_name('Red Deck'))
+				G.viewed_stake = 1
 				local revert = H.fake_queue()
 				G.FUNCS.start_run(nil, nil)
 				G.FUNCS.mpapi_queue_guard_leave_play(nil)
@@ -264,6 +277,16 @@ return function(H)
 				done()
 			end,
 			teardown = function()
+				-- The run this scenario starts SAVES over the profile's current
+				-- run; delete that suite-created save so it cannot leak into
+				-- later runs (a leftover save flips the setup screen to the
+				-- Continue tab and changes which deck a scripted start uses).
+				pcall(function()
+					love.filesystem.remove(G.SETTINGS.profile .. '/save.jkr')
+				end)
+				local mem = G.PROFILES[G.SETTINGS.profile].MEMORY
+				mem.deck, mem.stake = H._mem_deck, H._mem_stake
+				H._mem_deck, H._mem_stake = nil, nil
 				if H._guard_revert then
 					H._guard_revert()
 					H._guard_revert = nil
