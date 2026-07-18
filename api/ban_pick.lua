@@ -573,6 +573,14 @@ local function clamp_popup(popup, anchor)
 		return
 	end
 	popup._mp_tb_clamp = true
+	-- NOTE on Card anchors (tiles): vanilla Card:move re-calls
+	-- set_alignment(align_h_popup()) EVERY frame, which resets both
+	-- alignment.lr_clamp and the offset table -- so for tile popups the
+	-- one-shot offset mutation and the lr_clamp flag are overwritten before
+	-- they ever act, and the per-frame wrapper below is the ONLY mechanism
+	-- that holds. It therefore clamps BOTH axes itself. (UIElement anchors
+	-- like the badge have no such per-frame realignment; for them the
+	-- one-shot offset works and lr_clamp stays set.)
 	local a = popup.alignment
 	if a then
 		a.lr_clamp = true
@@ -596,6 +604,9 @@ local function clamp_popup(popup, anchor)
 		base_move(p, dt)
 		p.T.y = popup_clamp_y(p.T.y, p.T.h, G.ROOM.T.h, 0.05)
 		p.VT.y = popup_clamp_y(p.VT.y, p.VT.h, G.ROOM.T.h, 0.05)
+		-- Same clamp horizontally (bounds [0, room_w], mirroring lr_clamp).
+		p.T.x = popup_clamp_y(p.T.x, p.T.w, G.ROOM.T.w, 0)
+		p.VT.x = popup_clamp_y(p.VT.x, p.VT.w, G.ROOM.T.w, 0)
 	end
 end
 
@@ -744,12 +755,6 @@ local function deck_tile(item, banned, area, decorate)
 	-- Identity is the item ID (key+stake for tuples): marking Red@White must not
 	-- raise or ban the Red@Gold tile sitting next to it.
 	card.mp_item_id = id
-
-	-- Tiles are buttons, not hand cards: Card defaults to draggable, and
-	-- click-holding a tile let the player drag it around the panel while its
-	-- hover popup vanished mid-read. Selection raising is the only movement
-	-- these ever do.
-	card.states.drag.can = false
 
 	-- Clicking toggles the mark; nothing commits here (that's the Confirm button).
 	-- Off-turn and banned tiles don't react at all.
