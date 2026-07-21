@@ -2,10 +2,8 @@ local api_client = MPAPI.networking.api_client
 
 -- POST /api/matches/:id/draft-pool. Idempotent server-side: the first call rolls
 -- and persists the pool, every retry/reconnect returns the identical pool.
--- 404 = the queue has no draft policy -- the caller's signal to generate locally.
--- `max_stake` (optional) is this client's compatibility cap: the server filters
--- stakes to id <= cap when generating, so compat-mod restrictions just work.
-function api_client:issue_draft_pool(token, match_id, max_stake, callback)
+-- 404 = the queue has no draft policy -- the caller's signal to abort the draft.
+function api_client:issue_draft_pool(token, match_id, callback)
 	if not self:_transport_ready() then
 		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
 		return
@@ -13,8 +11,7 @@ function api_client:issue_draft_pool(token, match_id, max_stake, callback)
 
 	self:_setup_json_callback(callback)
 
-	local body = max_stake and api_client.json_encode({ maxStake = max_stake }) or '{}'
-	self.mqtt:http_post_auth(self.base_url .. '/api/matches/' .. match_id .. '/draft-pool', body, token)
+	self.mqtt:http_post_auth(self.base_url .. '/api/matches/' .. match_id .. '/draft-pool', '{}', token)
 end
 
 -- POST /api/matches/:id/draft-events. Audit stash for applied draft actions;

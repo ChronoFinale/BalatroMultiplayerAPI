@@ -1,29 +1,28 @@
--- Server-generated draft support (OPT-IN). Consumers that never call these keep
--- fully client-side drafts; servers without the endpoints 404 into the fallback.
+-- Server-generated draft support. The consumer's draft only ever runs inside
+-- matchmaking, and every matchmaking queue has a server draft policy.
 --
 -- The contract with consumers:
 --   fetch_draft_pool(match_id, cb)  -> cb(pool) with an array of { key, stake }
 --                                      items ready for BanPick, or cb(nil) on ANY
 --                                      failure (no connection, no match id, no
 --                                      policy for the queue, transport error) --
---                                      nil always means "generate locally".
+--                                      the caller must abort the draft on nil.
 --   record_draft_event(match_id, e) -> fire-and-forget audit post; e = { seq,
 --                                      action = 'ban'|'pick', key, stake }.
 --                                      Failures are logged, never surfaced.
 
 MPAPI.matchmaking = MPAPI.matchmaking or {}
 
-function MPAPI.matchmaking.fetch_draft_pool(match_id, callback, opts)
+function MPAPI.matchmaking.fetch_draft_pool(match_id, callback)
 	local conn = MPAPI.get_connection()
 	if not conn or not conn.api or not conn.jwt_token or not match_id then
 		callback(nil)
 		return
 	end
-	local max_stake = opts and opts.max_stake or nil
-	conn.api:issue_draft_pool(conn.jwt_token, match_id, max_stake, function(err, data)
+	conn.api:issue_draft_pool(conn.jwt_token, match_id, function(err, data)
 		if err or not data or type(data.pool) ~= 'table' then
 			if err then
-				MPAPI.sendDebugMessage('[draft] pool fetch failed (falling back to local): ' .. tostring(err.message or err))
+				MPAPI.sendDebugMessage('[draft] pool fetch failed (caller must abort the draft): ' .. tostring(err.message or err))
 			end
 			callback(nil)
 			return
