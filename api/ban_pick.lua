@@ -532,7 +532,7 @@ BP._stake_column = {
 -- engine's Moveable alignment flips a popup above ('tm') or below ('bm') its
 -- tile but only ever clamps horizontally (Moveable:lr_clamp), so a popup
 -- taller than the space on its side of the tile runs off screen -- e.g. the
--- weekly cocktail's full composition hovered from the bottom tile row.
+-- composition popup hovered from the bottom tile row.
 -- Given the popup's post-move position, return the y that keeps it inside
 -- [edge, room_h - edge] (room top edge is y = 0). Bottom edge is applied
 -- first so the top-edge rule wins for popups taller than the room: the top
@@ -654,22 +654,24 @@ local function popup_desc_row(center)
 	}
 end
 
--- The weekly cocktail's title row (server-delivered short name, a proper
--- noun shown verbatim, plus the LOCALIZED "Cocktail" suffix -- "Casjb"
--- renders as "Casjb Cocktail" in English and the suffix translates
--- elsewhere) and mix line, shared by both cocktail popups.
+-- Title rows for a composite item's popup: its `name` (a display title the
+-- consumer sets verbatim -- the engine is composite-agnostic and never adds
+-- words like "Cocktail" itself) and optional `subtitle`. Both shared by the
+-- tile hover and the badge detail.
 local function composition_header(item)
 	local rows = {}
-	if item.cocktail_name then
-		rows[#rows + 1] = popup_name_row(tostring(item.cocktail_name) .. ' ' .. localize('k_cocktail_suffix'), 0.5)
+	if item.name then
+		rows[#rows + 1] = popup_name_row(tostring(item.name), 0.5)
 	end
-	rows[#rows + 1] = {
-		n = G.UIT.R,
-		config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.35 },
-		nodes = {
-			{ n = G.UIT.T, config = { text = localize('k_banpick_weekly_mix'), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
-		},
-	}
+	if item.subtitle then
+		rows[#rows + 1] = {
+			n = G.UIT.R,
+			config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.35 },
+			nodes = {
+				{ n = G.UIT.T, config = { text = tostring(item.subtitle), scale = 0.32, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
+			},
+		}
+	end
 	return rows
 end
 
@@ -678,7 +680,7 @@ end
 -- detail popup.
 local function composition_rows(item)
 	local rows = composition_header(item)
-	for _, ckey in ipairs(item.cocktail) do
+	for _, ckey in ipairs(item.decks) do
 		local ccenter = G.P_CENTERS[ckey]
 		if ccenter then
 			rows[#rows + 1] = popup_name_row(Back(ccenter):get_name(), 0.38)
@@ -693,7 +695,7 @@ end
 -- can guarantee, while three columns stay ~2 units tall and always fit.
 local function composition_detail(item)
 	local cols = {}
-	for _, ckey in ipairs(item.cocktail) do
+	for _, ckey in ipairs(item.decks) do
 		local ccenter = G.P_CENTERS[ckey]
 		if ccenter then
 			cols[#cols + 1] = {
@@ -786,12 +788,12 @@ local function deck_tile(item, banned, area, decorate)
 		-- Two columns: deck info (left) and, for tuple pools, stake info (right).
 		local left = {}
 		local right = {}
-		local has_composition = type(item) == "table" and type(item.cocktail) == "table"
+		local has_composition = type(item) == "table" and type(item.decks) == "table"
 
 		if has_composition then
 			-- COMPACT on purpose: names only, no per-deck effect boxes. The full
-			-- breakdown lives in the cocktail badge's detail popup at the top of
-			-- the panel (see cocktail_badge_row) -- a tile-anchored tooltip tall
+			-- breakdown lives in the composition badge's detail popup at the top of
+			-- the panel (see composition_badge_row) -- a tile-anchored tooltip tall
 			-- enough to hold three deck descriptions inevitably covers the tile
 			-- row it is pointing at, whatever the clamping does.
 			for _, row in ipairs(composition_rows(item)) do
@@ -849,14 +851,14 @@ local function deck_tile(item, banned, area, decorate)
 	end
 end
 
--- Per-frame init for the cocktail badge element (config.func): installs a
+-- Per-frame init for the composition badge element (config.func): installs a
 -- custom hover that shows the FULL composition -- each contained deck's name
 -- and effects -- as a popup growing DOWNWARD from the badge (vanilla
 -- on_demand_tooltip geometry for top-anchored elements). The badge sits at
 -- the top of the draft panel, so unlike a tile-anchored tooltip the detail
 -- has the whole panel height to grow into and can only cover tiles while the
 -- player is deliberately reading it, never while they are picking.
-G.FUNCS.mpapi_cocktail_badge_init = function(e)
+G.FUNCS.mpapi_composition_badge_init = function(e)
 	if e._mp_badge_init then
 		return
 	end
@@ -881,21 +883,21 @@ G.FUNCS.mpapi_cocktail_badge_init = function(e)
 	end
 end
 
--- The always-visible weekly-cocktail badge row: "<Name> Cocktail: Deck A +
--- Deck B + Deck C" at a glance, full details on hover (see the init func
--- above). Only built when the pool actually contains a composition item.
-local function cocktail_badge_row(comp_item)
+-- The always-visible composition badge row: "<Name>: Deck A + Deck B +
+-- Deck C" at a glance, full details on hover (see the init func above).
+-- Only built when the pool contains an item carrying a `decks` list. The
+-- title is the item's `name` verbatim (the consumer owns the wording); an
+-- item with no name falls back to just the deck list.
+local function composition_badge_row(comp_item)
 	local names = {}
-	for _, ckey in ipairs(comp_item.cocktail) do
+	for _, ckey in ipairs(comp_item.decks) do
 		local ccenter = G.P_CENTERS[ckey]
 		if ccenter then
 			names[#names + 1] = Back(ccenter):get_name()
 		end
 	end
-	local title = comp_item.cocktail_name
-			and (tostring(comp_item.cocktail_name) .. ' ' .. localize('k_cocktail_suffix'))
-		or localize('k_banpick_weekly_mix')
-	local label = title .. ': ' .. table.concat(names, ' + ')
+	local decks_label = table.concat(names, ' + ')
+	local label = comp_item.name and (tostring(comp_item.name) .. ': ' .. decks_label) or decks_label
 	return {
 		n = G.UIT.R,
 		config = { align = 'cm', padding = 0.04 },
@@ -905,7 +907,7 @@ local function cocktail_badge_row(comp_item)
 				config = {
 					align = 'cm', padding = 0.08, r = 0.1,
 					colour = G.C.L_BLACK, outline = 1, outline_colour = G.C.UI.OUTLINE_LIGHT_TRANS,
-					func = 'mpapi_cocktail_badge_init',
+					func = 'mpapi_composition_badge_init',
 					mp_comp_item = comp_item,
 				},
 				nodes = {
@@ -960,11 +962,11 @@ local function build_banpick_contents()
 		{ n = G.UIT.T, config = { text = detail, scale = 0.32, colour = G.C.UI.TEXT_LIGHT } },
 	} }
 
-	-- Weekly-cocktail badge (top of the panel, above the tiles): at-a-glance
+	-- Composition badge (top of the panel, above the tiles): at-a-glance
 	-- composition, full per-deck details on hover.
 	for _, item in ipairs(state.pool) do
-		if type(item) == "table" and type(item.cocktail) == "table" then
-			rows[#rows + 1] = cocktail_badge_row(item)
+		if type(item) == "table" and type(item.decks) == "table" then
+			rows[#rows + 1] = composition_badge_row(item)
 			break
 		end
 	end

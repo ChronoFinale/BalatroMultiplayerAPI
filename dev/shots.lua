@@ -36,8 +36,9 @@ return function(H)
 		local pool = { unpack(TUPLE_POOL) }
 		pool[3] = {
 			key = 'b_mp_cocktail', stake = 3,
-			cocktail = { 'b_green', 'b_black', 'b_mp_orange' },
-			cocktail_name = 'Casjb',
+			decks = { 'b_green', 'b_black', 'b_mp_orange' },
+			name = 'Casjb Cocktail', -- consumer owns the wording; engine renders verbatim
+			subtitle = 'A rotating 3-deck mix',
 		}
 		return pool
 	end
@@ -151,7 +152,7 @@ return function(H)
 				if badge then
 					-- The rich hover is installed by the badge's per-frame init
 					-- func; run it explicitly (idempotent) before hovering.
-					G.FUNCS.mpapi_cocktail_badge_init(badge)
+					G.FUNCS.mpapi_composition_badge_init(badge)
 					badge:hover()
 				end
 				done()
