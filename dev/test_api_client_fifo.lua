@@ -39,7 +39,7 @@ dofile('networking/api_client/lobby.lua')        -- adds join_lobby
 local AC = MPAPI.networking.api_client
 
 local function make_fake_mqtt()
-	local m = { tx_channel = true, sent = {} }
+	local m = { tx_channel = true, thread = true, sent = {} }
 	local function rec(url) m.sent[#m.sent + 1] = url end
 	m.http_post_auth = function(_self, url) rec(url) end
 	m.http_delete_with_body_auth = function(_self, url) rec(url) end
@@ -139,6 +139,21 @@ client3.mqtt.on_http_response(200, LEAVE_BODY) -- extra response, queue now empt
 check(#warns == 1, 'warned on the response that had nothing pending')
 client3.mqtt.on_http_error('late') -- error with empty queue also warns
 check(#warns == 2, 'warned on an error with nothing pending too')
+
+-- ── dead worker: requests refused up front, pending requests flushed ────────
+-- A crashed worker thread leaves tx_channel intact but undrained; queueing into
+-- it would hang the caller forever (e.g. the host's fetch-then-start draft).
+print()
+print('-- dead worker: refuse new requests, flush pending with errors --')
+local client4 = AC.new(make_fake_mqtt(), 'http://x')
+local pending_err, refused_err
+client4:leave_matchmaking_queue('tok', {}, function(err) pending_err = err end)
+client4.mqtt.on_transport_dead('MQTT worker thread crashed: boom') -- what update() fires
+check(pending_err ~= nil and pending_err.kind == 'TRANSPORT', 'pending request flushed with a TRANSPORT error')
+check(#client4._queue == 0, 'queue emptied by the flush')
+client4.mqtt.thread = nil -- what update() sets on crash
+client4:join_lobby('tok', 'ABC', function(err) refused_err = err end)
+check(refused_err ~= nil and refused_err.kind == 'NOT_CONNECTED', 'new requests refused once the thread is gone')
 
 -- ── Summary ─────────────────────────────────────────────────────────────────
 print()

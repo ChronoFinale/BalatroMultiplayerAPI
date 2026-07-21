@@ -36,9 +36,26 @@ function api_client.json_decode(str)
 end
 
 -- True when the MQTT worker thread is up and able to carry HTTP requests. Every
--- request method guards on this before touching the transport.
+-- request method guards on this before touching the transport. The thread check
+-- matters: after a worker crash the channel object still exists but nobody
+-- drains it -- queueing into it would hang the caller forever.
 function api_client:_transport_ready()
-	return self.mqtt and self.mqtt.tx_channel
+	return self.mqtt and self.mqtt.tx_channel and self.mqtt.thread
+end
+
+-- Fail every pending request. Called when the worker thread dies (nothing will
+-- ever answer the in-flight requests): each caller gets its error callback, so
+-- fallback paths engage instead of hanging. Queue-lifetime-follows-transport,
+-- the same rule mature DB clients use.
+function api_client:_flush_pending(reason)
+	local pending = self._queue
+	self._queue = {}
+	for _, entry in ipairs(pending) do
+		local ok, err = pcall(entry.on_error, reason)
+		if not ok then
+			MPAPI.sendWarnMessage('api_client: pending-flush callback errored: ' .. tostring(err))
+		end
+	end
 end
 
 -- Install the persistent response router on the current mqtt transport. Each
@@ -72,6 +89,9 @@ function api_client:_install_router()
 		else
 			MPAPI.sendWarnMessage('api_client: http_error with no pending request -- response-queue desync')
 		end
+	end
+	self.mqtt.on_transport_dead = function(reason)
+		self:_flush_pending(reason)
 	end
 end
 

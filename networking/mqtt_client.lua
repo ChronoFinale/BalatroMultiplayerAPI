@@ -385,6 +385,12 @@ function mqtt_client:update()
 			end
 			self.connected = false
 			self.thread = nil
+			-- Nobody will ever drain tx_channel or answer pending HTTP requests
+			-- now: let the api_client flush its FIFO with errors so every caller
+			-- gets its callback (nil -> fallback paths) instead of hanging forever.
+			if self.on_transport_dead then
+				self.on_transport_dead('MQTT worker thread crashed: ' .. tostring(err))
+			end
 		end
 	end
 end
