@@ -2,26 +2,19 @@
 -- Ban-Pick engine
 -----------------------------
 --
--- A generic, host-authoritative, turn-based deck draft. The host owns the canonical
--- state: it builds the candidate pool + turn order, validates every action, and
--- broadcasts the full state after each change. Guests only render the broadcast state
--- and request actions; they never mutate state locally.
+-- A generic, host-authoritative, turn-based deck draft. The host builds the candidate
+-- pool + turn order, validates every action, and broadcasts full state; guests only
+-- render it and request actions.
 --
--- Two draft shapes are supported through one engine:
---   * Legacy: `config = { pool_size, keep }` -> alternating single bans down to `keep`
---     (this is what the Speedrun mod uses; unchanged behaviour aside from random first).
---   * Scheduled: `config.schedule = { { actor=1|2, action='ban'|'pick', count=N }, ... }`
---     -> arbitrary per-turn ban counts and a final 'pick' (the picked item wins).
+-- Two draft shapes: legacy `config = { pool_size, keep }` (alternating single bans down
+-- to `keep`, e.g. Speedrun), or `config.schedule = { { actor=1|2, action='ban'|'pick',
+-- count=N }, ... }` for arbitrary per-turn counts + a final 'pick' (winner survives).
 --
--- Pool items may be plain center KEYS ('b_red') or tables `{ key='b_red', ... }` carrying
--- metadata (e.g. a stake); `config.decorate_tile(card, item)` lets the consumer decorate
--- each tile (e.g. stamp a stake sticker). The FIRST actor is always randomized.
+-- Pool items are plain center KEYS or `{ key=..., <meta> }` tables; `config.decorate_tile`
+-- lets the consumer stamp each tile. First actor is always randomized.
 --
--- The two networked actions live in the *consuming* mod (a lobby only routes ActionTypes
--- whose mod.id matches -- see api/lobby.lua). The caller passes their keys via
--- config.state_action / config.ban_action; the on_receive handlers delegate straight to
--- MPAPI.BanPick.on_state / MPAPI.BanPick.apply_ban. The same ban_action message drives
--- both bans and the final pick (the host routes by the current step's action).
+-- The two networked actions live in the CONSUMING mod: config.state_action / ban_action
+-- route to MPAPI.BanPick.on_state / apply_ban (same ban_action drives bans + the pick).
 
 MPAPI.BanPick = MPAPI.BanPick or {}
 local BP = MPAPI.BanPick
@@ -43,20 +36,11 @@ local _areas = {}
 -- (so there is nothing to peek at or reroll-fish for).
 local _random_armed = false
 
--- Broadcast staleness guard, scoped PER DRAFT. The host stamps every draft
--- with a unique draft_id (host id + wall clock + counter) and every broadcast
--- with a per-draft serial that rides ON the state (the host's own loopback
--- replaces lobby._ban_pick, so the counter must travel with it). on_state:
---   * a state whose draft_id is in the dead set (any COMPLETED or superseded
---     draft) is dropped -- a late duplicate of an OLD final broadcast can
---     neither render a stale board nor complete the NEW draft;
---   * a new draft_id resets the serial watermark and is accepted (each host
---     numbers its own drafts, so serials are NEVER compared across drafts --
---     comparing them across hosts is exactly the cross-host wedge this design
---     replaces);
---   * within a draft, serials below the watermark drop; equal re-applies
---     (reconnect refresh / QoS1 re-delivery of the CURRENT state).
--- A state with no draft_id at all (older host build) is accepted as before.
+-- Per-draft staleness guard: the host stamps each draft with a unique draft_id
+-- and each broadcast with a per-draft serial carried ON the state. on_state
+-- drops a state from a dead (completed/superseded) draft, or a serial below the
+-- draft's watermark; a new draft_id resets the watermark; an equal serial
+-- re-applies (reconnect / QoS1 re-delivery). No draft_id (older host) = accept.
 local _current_draft_id = nil
 local _last_serial = 0
 local _dead_drafts = {}
@@ -74,12 +58,10 @@ local function item_key(item)
 	return item
 end
 
--- Unique identity of a pool item WITHIN its pool. Tuple pools may repeat a deck
--- at different stakes (the Botlatro rules allow up to 3), so identity must be
--- key+stake, not key -- banning Red@White must not also ban Red@Gold. Plain
--- string items keep their key as their id, so plain-key pools (Speedrun style)
--- behave exactly as before. Ids travel opaquely through the ban wire format
--- (the consumer ActionTypes' item_key parameter) and the selection UI.
+-- Unique identity of a pool item WITHIN its pool. Tuple pools may repeat a deck at
+-- different stakes (up to 3), so identity must be key+stake, not key -- banning
+-- Red@White must not also ban Red@Gold. Plain string items just use their key.
+-- Ids travel opaquely through the ban wire format (item_key) and the selection UI.
 local function item_id(item)
 	if type(item) == "table" then
 		if item.stake ~= nil then
@@ -387,18 +369,14 @@ local function sync_selection_ui(state)
 	end
 end
 
--- Stake-column construction is split in two phases (exposed for tests via
--- BP._stake_column). gather_stake_column runs EVERY fallible call -- the
--- G.P_CENTER_POOLS lookups, loc_vars, get_stake_col and all localize calls --
--- collecting plain data into a caller-owned collector; build_stake_column then
--- assembles UI nodes from a completed gather with nothing left that can fail.
+-- Stake-column build is split in two (BP._stake_column): gather_stake_column runs
+-- every fallible call (pool lookups, loc_vars, localize) into a caller-owned
+-- collector; build_stake_column then assembles UI nodes from the completed gather.
 -- The split matters because localize{type='descriptions'} CONSTRUCTS live
--- DynaText/UIBox objects for {E:}-coded parts the moment it runs
--- (SMODS.localize_box; they self-register into G.I.MOVEABLE at construction):
--- each nodes table is parked in gathered.line_sets BEFORE the localize call
--- that fills it, so a mid-gather failure leaves every constructed object
--- reachable for release_stake_column -- never orphaned, drawing unparented at
--- the screen origin.
+-- DynaText/UIBox objects the moment it runs (they self-register into G.I.MOVEABLE) --
+-- each nodes table is parked in gathered.line_sets BEFORE that call, so a mid-gather
+-- failure still leaves every object reachable for release_stake_column, never
+-- orphaned at the screen origin.
 local function release_line_nodes(node)
 	if type(node) ~= "table" then
 		return
@@ -528,15 +506,12 @@ BP._stake_column = {
 	release = release_stake_column,
 }
 
--- Pure vertical-clamp decision for the hover popup (see card:hover). The
--- engine's Moveable alignment flips a popup above ('tm') or below ('bm') its
--- tile but only ever clamps horizontally (Moveable:lr_clamp), so a popup
--- taller than the space on its side of the tile runs off screen -- e.g. the
--- composition popup hovered from the bottom tile row.
--- Given the popup's post-move position, return the y that keeps it inside
--- [edge, room_h - edge] (room top edge is y = 0). Bottom edge is applied
--- first so the top-edge rule wins for popups taller than the room: the top
--- of the content is what the player must be able to read.
+-- Pure vertical-clamp decision for the hover popup (see card:hover). The engine's
+-- Moveable alignment flips a popup above/below its tile but only ever clamps
+-- horizontally (lr_clamp), so a popup taller than its side's space runs off screen
+-- (e.g. the composition popup from the bottom row). Returns the y keeping the popup
+-- inside [edge, room_h - edge]; bottom is applied first so the top-edge rule wins for
+-- popups taller than the room -- the content's top is what must stay readable.
 local function popup_clamp_y(y, h, room_h, edge)
 	if y + h > room_h - edge then
 		y = room_h - edge - h
@@ -552,35 +527,26 @@ BP._popup = {
 	clamp_y = popup_clamp_y,
 }
 
--- Keep a hover popup on screen. Two mechanisms, because the engine treats
--- still and moving anchors differently (Moveable:move gates a minor's
--- move_with_major on `not STATIONARY or NEW_ALIGNMENT`):
---
--- 1. STATIC anchors (the badge; an unmoving tile): a one-shot mutation of
---    the alignment offset, applied before the popup's first move -- the
---    changed offset makes align_to_major raise NEW_ALIGNMENT, so the whole
---    content tree re-aligns to the clamped position. Directly clamping T/VT
---    would NOT work here: the drawn content tree never re-follows a
---    stationary popup's outer box, so only the invisible box would move.
--- 2. MOVING anchors (selecting a tile raises it, carrying the popup): a
---    per-frame clamp of the outer transforms after every move. While the
---    anchor moves, nothing is stationary, so the content tree re-follows
---    the clamped box each frame (one frame behind, which settles).
---
+-- Keep a hover popup on screen. Two mechanisms, since the engine treats still and
+-- moving anchors differently (Moveable:move gates move_with_major on `not STATIONARY
+-- or NEW_ALIGNMENT`):
+-- 1. STATIC anchors (badge, unmoving tile): a one-shot offset mutation before the
+--    popup's first move raises NEW_ALIGNMENT, so the content tree re-aligns to the
+--    clamped position. Clamping T/VT directly would NOT work: a stationary popup's
+--    content tree never re-follows its outer box.
+-- 2. MOVING anchors (a raised tile carrying the popup): a per-frame clamp of the
+--    outer transforms, since the content tree re-follows every frame anyway.
 -- lr_clamp covers the horizontal axis for wide popups.
 local function clamp_popup(popup, anchor)
 	if not popup or not popup.T or popup._mp_tb_clamp then
 		return
 	end
 	popup._mp_tb_clamp = true
-	-- NOTE on Card anchors (tiles): vanilla Card:move re-calls
-	-- set_alignment(align_h_popup()) EVERY frame, which resets both
-	-- alignment.lr_clamp and the offset table -- so for tile popups the
-	-- one-shot offset mutation and the lr_clamp flag are overwritten before
-	-- they ever act, and the per-frame wrapper below is the ONLY mechanism
-	-- that holds. It therefore clamps BOTH axes itself. (UIElement anchors
-	-- like the badge have no such per-frame realignment; for them the
-	-- one-shot offset works and lr_clamp stays set.)
+	-- NOTE: vanilla Card:move re-calls set_alignment(align_h_popup()) EVERY frame,
+	-- resetting alignment.lr_clamp and offset -- so for TILE anchors the one-shot
+	-- mutation above is overwritten before it acts, and the per-frame wrapper below
+	-- is the only mechanism that holds (it clamps both axes). UIElement anchors like
+	-- the badge have no such realignment, so the one-shot offset works for them.
 	local a = popup.alignment
 	if a then
 		a.lr_clamp = true
@@ -731,6 +697,61 @@ local function popup_container(columns)
 	}
 end
 
+-- Tile hover popup: mod badges (top of the panel) built via the vanilla
+-- SMODS helper; mod_set is stripped the same as before (never shown here).
+local function build_hover_mod_badges(center)
+	local badges = { n = G.UIT.C, config = { colour = G.C.CLEAR, align = "cm" }, nodes = {} }
+	SMODS.create_mod_badges(center, badges.nodes)
+	if badges.nodes.mod_set then
+		badges.nodes.mod_set = nil
+	end
+	return badges
+end
+
+-- Left column of the tile hover: deck info (name+desc, or compact composition rows
+-- for a composite item), then mod badges. COMPACT for composite items on purpose --
+-- full per-deck details live in the composition badge's popup instead, since a tile
+-- tooltip tall enough for three descriptions would cover the row it points at.
+local function build_hover_left_column(item, center, badges)
+	local left = {}
+	local has_composition = type(item) == "table" and type(item.decks) == "table"
+	if has_composition then
+		for _, row in ipairs(composition_rows(item)) do
+			left[#left + 1] = row
+		end
+	else
+		left[#left + 1] = popup_name_row(Back(center):get_name(), 0.5)
+		left[#left + 1] = popup_desc_row(center)
+	end
+	if badges.nodes[1] then
+		left[#left + 1] = {
+			n = G.UIT.R,
+			config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
+			nodes = { badges },
+		}
+	end
+	return left
+end
+
+-- Right column of the tile hover: the stake column (gather_stake_column /
+-- build_stake_column above), only for tuple-pool items with a numeric stake.
+-- Two-phase gather -> build inside a pcall: a loc failure degrades to a logged
+-- warning with every already-constructed object released -- never a dead hover.
+local function build_hover_right_column(item)
+	local right = {}
+	if type(item) == "table" and type(item.stake) == "number" then
+		local gathered = { descs = {}, line_sets = {} }
+		local ok, err = pcall(gather_stake_column, item, gathered)
+		if ok and gathered.ready then
+			right = build_stake_column(gathered)
+		elseif not ok then
+			release_stake_column(gathered)
+			MPAPI.sendWarnMessage('[banpick] stake column failed: ' .. tostring(err))
+		end
+	end
+	return right
+end
+
 -- One deck tile: a card showing the deck's Back center. `item` may carry metadata; the
 -- consumer's decorate_tile(card, item) is called after emplace (e.g. to stamp a stake
 -- sticker via card.sticker). BANNED tiles are debuffed.
@@ -779,57 +800,10 @@ local function deck_tile(item, banned, area, decorate)
 	end
 
 	function card:hover()
-		local badges = { n = G.UIT.C, config = { colour = G.C.CLEAR, align = "cm" }, nodes = {} }
-		SMODS.create_mod_badges(self.config.center, badges.nodes)
-		if badges.nodes.mod_set then
-			badges.nodes.mod_set = nil
-		end
-
 		-- Two columns: deck info (left) and, for tuple pools, stake info (right).
-		local left = {}
-		local right = {}
-		local has_composition = type(item) == "table" and type(item.decks) == "table"
-
-		if has_composition then
-			-- COMPACT on purpose: names only, no per-deck effect boxes. The full
-			-- breakdown lives in the composition badge's detail popup at the top of
-			-- the panel (see composition_badge_row) -- a tile-anchored tooltip tall
-			-- enough to hold three deck descriptions inevitably covers the tile
-			-- row it is pointing at, whatever the clamping does.
-			for _, row in ipairs(composition_rows(item)) do
-				left[#left + 1] = row
-			end
-		else
-			left[#left + 1] = popup_name_row(Back(self.config.center):get_name(), 0.5)
-			left[#left + 1] = popup_desc_row(self.config.center)
-		end
-
-		if badges.nodes[1] then
-			left[#left + 1] = {
-				n = G.UIT.R,
-				config = { align = "cm", r = 0.1, minw = 3, maxw = 4, minh = 0.4 },
-				nodes = { badges },
-			}
-		end
-
-		-- Stake column (right of the deck info), built on the vanilla
-		-- G.UIDEF.current_stake pattern: the stake's name in its colour, its own
-		-- full description, then (stakes being cumulative) "Also applied:" with
-		-- every previous stake's modifier, chip-swatch + white box per stake.
-		-- Two-phase (gather -> build): every fallible call runs and completes
-		-- inside the pcall BEFORE any node accumulation, so a loc surprise
-		-- degrades to a logged warning with every already-constructed object
-		-- released -- never a dead hover, never orphaned drawables.
-		if type(item) == "table" and type(item.stake) == "number" then
-			local gathered = { descs = {}, line_sets = {} }
-			local ok, err = pcall(gather_stake_column, item, gathered)
-			if ok and gathered.ready then
-				right = build_stake_column(gathered)
-			elseif not ok then
-				release_stake_column(gathered)
-				MPAPI.sendWarnMessage('[banpick] stake column failed: ' .. tostring(err))
-			end
-		end
+		local badges = build_hover_mod_badges(self.config.center)
+		local left = build_hover_left_column(item, self.config.center, badges)
+		local right = build_hover_right_column(item)
 
 		local columns = { { n = G.UIT.C, config = { align = "tm", padding = 0.05 }, nodes = left } }
 		if right[1] then
@@ -851,13 +825,10 @@ local function deck_tile(item, banned, area, decorate)
 	end
 end
 
--- Per-frame init for the composition badge element (config.func): installs a
--- custom hover that shows the FULL composition -- each contained deck's name
--- and effects -- as a popup growing DOWNWARD from the badge (vanilla
--- on_demand_tooltip geometry for top-anchored elements). The badge sits at
--- the top of the draft panel, so unlike a tile-anchored tooltip the detail
--- has the whole panel height to grow into and can only cover tiles while the
--- player is deliberately reading it, never while they are picking.
+-- Per-frame init for the composition badge (config.func): installs a hover showing
+-- the FULL composition (each deck's name + effects) as a popup growing DOWNWARD
+-- from the badge (top-anchored on_demand_tooltip geometry). Sitting at the panel top
+-- gives it the whole panel height to grow into, covering tiles only while read.
 G.FUNCS.mpapi_composition_badge_init = function(e)
 	if e._mp_badge_init then
 		return
@@ -918,31 +889,17 @@ local function composition_badge_row(comp_item)
 	}
 end
 
-local function build_banpick_contents()
-	local lobby = MPAPI.get_current_lobby()
-	local state = lobby and lobby._ban_pick
-
-	if not state or not state.pool then
-		return {
-			{ n = G.UIT.R, config = { align = 'cm', minh = 2 }, nodes = {
-				{ n = G.UIT.T, config = { text = localize('k_banpick_waiting'), scale = 0.4, colour = G.C.UI.TEXT_LIGHT } },
-			} },
-		}
-	end
-
-	local my_turn = is_my_turn(lobby, state)
-	local step = current_step(state)
-	local is_pick = step and step.action == "pick"
-	local left = survivors_left(state)
-
-	local rows = {}
-
-	-- Title.
-	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.05 }, nodes = {
+-- Title row.
+local function build_title_row()
+	return { n = G.UIT.R, config = { align = 'cm', padding = 0.05 }, nodes = {
 		{ n = G.UIT.T, config = { text = localize('k_banpick_title'), scale = 0.6, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
 	} }
+end
 
-	-- Status: whose turn (ban vs pick) + how many actions/decks remain.
+-- Status: whose turn (ban vs pick), then how many actions/decks remain. Two
+-- separate rows, always both present (unlike the composition badge, which is
+-- conditional).
+local function build_status_rows(my_turn, is_pick, state, left)
 	local status_text
 	if not my_turn then
 		status_text = localize('k_banpick_their_turn')
@@ -952,26 +909,35 @@ local function build_banpick_contents()
 		status_text = localize('k_banpick_your_turn')
 	end
 	local status_colour = my_turn and G.C.GREEN or G.C.UI.TEXT_INACTIVE
-	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
+	local status_row = { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
 		{ n = G.UIT.T, config = { text = status_text, scale = 0.42, colour = status_colour, shadow = true } },
 	} }
 	local detail = is_pick
 		and (localize('k_banpick_decks_left') .. ' ' .. tostring(left))
 		or (localize('k_banpick_bans_left') .. ' ' .. tostring(state.sched_remaining or 0) .. '   ' .. localize('k_banpick_decks_left') .. ' ' .. tostring(left))
-	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.1 }, nodes = {
+	local detail_row = { n = G.UIT.R, config = { align = 'cm', padding = 0.1 }, nodes = {
 		{ n = G.UIT.T, config = { text = detail, scale = 0.32, colour = G.C.UI.TEXT_LIGHT } },
 	} }
+	return status_row, detail_row
+end
 
-	-- Composition badge (top of the panel, above the tiles): at-a-glance
-	-- composition, full per-deck details on hover.
+-- Composition badge (top of the panel, above the tiles): at-a-glance
+-- composition, full per-deck details on hover. Only the FIRST composite item
+-- gets a badge (matches the original `break` after the first match). Returns
+-- nil when the pool has no composite item.
+local function build_composition_badge_section(state)
 	for _, item in ipairs(state.pool) do
 		if type(item) == "table" and type(item.decks) == "table" then
-			rows[#rows + 1] = composition_badge_row(item)
-			break
+			return composition_badge_row(item)
 		end
 	end
+	return nil
+end
 
-	local decorate = _config and _config.decorate_tile
+-- The deck-tile grid: one CardArea per row of PER_ROW tiles, built left to
+-- right through the pool. Returns the areas (for _areas / selection sync) and
+-- the two rows (spacer + the grid itself) to append to the panel.
+local function build_tile_grid(state, decorate)
 	local areas = {}
 	local areas_container = {}
 	local cur_area = nil
@@ -996,46 +962,42 @@ local function build_banpick_contents()
 		end
 		deck_tile(item, state.banned[item_id(item)], cur_area, decorate)
 	end
-	-- Tiles are buttons, not hand cards: never draggable (click-holding one
-	-- would drag it around the panel and dismiss its hover popup mid-read;
-	-- with click-to-select, a slightly-held click must still be a click).
-	-- This MUST run after every emplace: CardArea:emplace -> set_ranks
-	-- re-enables drag on every card already in the area, so a per-tile
-	-- disable would only survive on the row's LAST tile.
+	-- Tiles are buttons, not hand cards: never draggable (dragging would dismiss the
+	-- hover popup mid-read; a held click must still register as a click). This MUST
+	-- run after every emplace -- CardArea:emplace -> set_ranks re-enables drag on
+	-- every card in the area, so a per-tile disable would only survive on the last.
 	for _, area in ipairs(areas) do
 		for _, card in ipairs(area.cards or {}) do
 			card.states.drag.can = false
 		end
 	end
-
-	rows[#rows + 1] = { n = G.UIT.R, config = { minh = 0.25 } }
-	rows[#rows + 1] = {
-		n = G.UIT.R,
-		config = { align = "cm", padding = 0.25, r = 0.25, colour = { 0, 0, 0, 0.1 } },
-		nodes = areas_container,
+	local grid_rows = {
+		{ n = G.UIT.R, config = { minh = 0.25 } },
+		{
+			n = G.UIT.R,
+			config = { align = "cm", padding = 0.25, r = 0.25, colour = { 0, 0, 0, 0.1 } },
+			nodes = areas_container,
+		},
 	}
+	return areas, grid_rows
+end
 
-	-- Re-apply any surviving selection to the freshly built tiles (the overlay is
-	-- rebuilt on every state broadcast; _selected was pruned in on_state).
-	_areas = areas
-	sync_selection_ui(state)
-
-	-- Selected counter + Confirm + Random (reroll). ALWAYS rendered -- on the
-	-- opponent's turn the check funcs grey both buttons out (inactive colour,
-	-- config.button nulled) rather than the row vanishing, so the panel keeps
-	-- one stable layout instead of jumping every turn flip. The counter text
-	-- updates live via ref_table.
-	rows[#rows + 1] = { n = G.UIT.R, config = { minh = 0.4 } }
-	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
+-- Selected counter row: "Selected: N/M", live via ref_table.
+local function build_selected_counter_row()
+	return { n = G.UIT.R, config = { align = 'cm', padding = 0.03 }, nodes = {
 		{ n = G.UIT.T, config = { text = localize('k_banpick_selected') .. ' ', scale = 0.35, colour = G.C.UI.TEXT_LIGHT } },
 		{ n = G.UIT.T, config = { ref_table = _sel_ui, ref_value = 'count_text', scale = 0.35, colour = G.C.UI.TEXT_LIGHT } },
 	} }
-	-- `button` must be present at definition time: UIElement:set_values only arms
-	-- states.click.can for nodes that HAVE config.button when the UIBox is built.
-	-- The per-frame check then gates it by nulling config.button while not ready
-	-- (the vanilla can_play pattern). The Random button is deliberately NOT
-	-- one_press: pressing it again re-rolls.
-	rows[#rows + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.06 }, nodes = {
+end
+
+-- Confirm + Random buttons. ALWAYS rendered -- on the opponent's turn the check
+-- funcs grey both out (inactive colour, config.button nulled) instead of the row
+-- vanishing, keeping one stable layout. `button` must be present at definition time
+-- (UIElement:set_values only arms click for nodes that HAVE it at UIBox build); the
+-- per-frame check then nulls it while not ready (vanilla can_play pattern). Random
+-- is deliberately NOT one_press: pressing it again re-rolls.
+local function build_action_buttons_row()
+	return { n = G.UIT.R, config = { align = 'cm', padding = 0.06 }, nodes = {
 		{
 			n = G.UIT.C,
 			config = {
@@ -1063,6 +1025,52 @@ local function build_banpick_contents()
 			},
 		},
 	} }
+end
+
+local function build_banpick_contents()
+	local lobby = MPAPI.get_current_lobby()
+	local state = lobby and lobby._ban_pick
+
+	if not state or not state.pool then
+		return {
+			{ n = G.UIT.R, config = { align = 'cm', minh = 2 }, nodes = {
+				{ n = G.UIT.T, config = { text = localize('k_banpick_waiting'), scale = 0.4, colour = G.C.UI.TEXT_LIGHT } },
+			} },
+		}
+	end
+
+	local my_turn = is_my_turn(lobby, state)
+	local step = current_step(state)
+	local is_pick = step and step.action == "pick"
+	local left = survivors_left(state)
+
+	local rows = {}
+
+	rows[#rows + 1] = build_title_row()
+
+	local status_row, detail_row = build_status_rows(my_turn, is_pick, state, left)
+	rows[#rows + 1] = status_row
+	rows[#rows + 1] = detail_row
+
+	local badge_row = build_composition_badge_section(state)
+	if badge_row then
+		rows[#rows + 1] = badge_row
+	end
+
+	local decorate = _config and _config.decorate_tile
+	local areas, grid_rows = build_tile_grid(state, decorate)
+	for _, r in ipairs(grid_rows) do
+		rows[#rows + 1] = r
+	end
+
+	-- Re-apply any surviving selection to the freshly built tiles (the overlay is
+	-- rebuilt on every state broadcast; _selected was pruned in on_state).
+	_areas = areas
+	sync_selection_ui(state)
+
+	rows[#rows + 1] = { n = G.UIT.R, config = { minh = 0.4 } }
+	rows[#rows + 1] = build_selected_counter_row()
+	rows[#rows + 1] = build_action_buttons_row()
 
 	return rows
 end
@@ -1157,13 +1165,11 @@ local function apply_action(lobby, from_player_id, id)
 		return true
 	end
 
-	-- Ban. `ban_order` records the sequence bans happened in -- unused by the legacy
-	-- survivors-only consumers (GSS/WST), but lets a `keep=0` draft (nothing survives) use the
-	-- order itself as a result, e.g. SPDRN's All Deck mode drafting play order rather than
-	-- narrowing a pool (see BalatroMultiplayerSpeed/objects/gamemodes/all_deck.lua).
-	-- Identity is the item id (key@stake for tuples), not the bare deck key.
-	-- ban_order stores the ITEM (same shape as survivors) so on_complete's two
-	-- args are consistently keys-or-{key,meta}-tables regardless of pool kind.
+	-- Ban. `ban_order` records the sequence bans happened in -- unused by legacy
+	-- survivors-only consumers, but lets a `keep=0` draft use the order itself as the
+	-- result (e.g. SPDRN's All Deck mode drafting play order, see all_deck.lua).
+	-- ban_order stores the ITEM (same shape as survivors) so on_complete's two args
+	-- stay consistently keys-or-{key,meta}-tables regardless of pool kind.
 	s.banned[id] = true
 	s.ban_order[#s.ban_order + 1] = item_for_id(s, id) or id
 	fire_action_applied(s, from_player_id, "ban", id)
@@ -1298,12 +1304,11 @@ function BP.start(lobby, config, on_complete)
 	_areas = {}
 	_random_armed = false
 
-	-- A new draft invalidates everything from the previous one. Clearing the
-	-- state matters on GUESTS (the host reassigns below anyway): otherwise the
-	-- old draft's COMPLETE state renders as a live board while the host is still
-	-- doing its async draft-pool fetch. Dead-marking the previous draft_id means
-	-- a late duplicate of the OLD final state cannot complete the NEW draft with
-	-- old survivors, regardless of which host numbered it.
+	-- A new draft invalidates the previous one. Clearing state matters on GUESTS
+	-- (host reassigns below anyway): otherwise the old COMPLETE state renders as a
+	-- live board while the host's async pool fetch is still running. Dead-marking
+	-- the old draft_id stops a late duplicate from completing the NEW draft with
+	-- stale survivors.
 	lobby._ban_pick = nil
 	if _current_draft_id then
 		_dead_drafts[_current_draft_id] = true
