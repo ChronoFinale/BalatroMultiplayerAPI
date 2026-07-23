@@ -2,19 +2,26 @@
 -- Ban-Pick engine
 -----------------------------
 --
--- A generic, host-authoritative, turn-based deck draft. The host builds the candidate
--- pool + turn order, validates every action, and broadcasts full state; guests only
--- render it and request actions.
+-- A generic, host-authoritative, turn-based deck draft. The host owns the canonical
+-- state: it builds the candidate pool + turn order, validates every action, and
+-- broadcasts the full state after each change. Guests only render the broadcast state
+-- and request actions; they never mutate state locally.
 --
--- Two draft shapes: legacy `config = { pool_size, keep }` (alternating single bans down
--- to `keep`, e.g. Speedrun), or `config.schedule = { { actor=1|2, action='ban'|'pick',
--- count=N }, ... }` for arbitrary per-turn counts + a final 'pick' (winner survives).
+-- Two draft shapes are supported through one engine:
+--   * Legacy: `config = { pool_size, keep }` -> alternating single bans down to `keep`
+--     (this is what the Speedrun mod uses; unchanged behaviour aside from random first).
+--   * Scheduled: `config.schedule = { { actor=1|2, action='ban'|'pick', count=N }, ... }`
+--     -> arbitrary per-turn ban counts and a final 'pick' (the picked item wins).
 --
--- Pool items are plain center KEYS or `{ key=..., <meta> }` tables; `config.decorate_tile`
--- lets the consumer stamp each tile. First actor is always randomized.
+-- Pool items may be plain center KEYS ('b_red') or tables `{ key='b_red', ... }` carrying
+-- metadata (e.g. a stake); `config.decorate_tile(card, item)` lets the consumer decorate
+-- each tile (e.g. stamp a stake sticker). The FIRST actor is always randomized.
 --
--- The two networked actions live in the CONSUMING mod: config.state_action / ban_action
--- route to MPAPI.BanPick.on_state / apply_ban (same ban_action drives bans + the pick).
+-- The two networked actions live in the *consuming* mod (a lobby only routes ActionTypes
+-- whose mod.id matches -- see api/lobby.lua). The caller passes their keys via
+-- config.state_action / config.ban_action; the on_receive handlers delegate straight to
+-- MPAPI.BanPick.on_state / MPAPI.BanPick.apply_ban. The same ban_action message drives
+-- both bans and the final pick (the host routes by the current step's action).
 
 MPAPI.BanPick = MPAPI.BanPick or {}
 local BP = MPAPI.BanPick
@@ -885,16 +892,14 @@ local function composition_badge_row(comp_item)
 	}
 end
 
--- Title row.
+-- Title.
 local function build_title_row()
 	return { n = G.UIT.R, config = { align = 'cm', padding = 0.05 }, nodes = {
 		{ n = G.UIT.T, config = { text = localize('k_banpick_title'), scale = 0.6, colour = G.C.UI.TEXT_LIGHT, shadow = true } },
 	} }
 end
 
--- Status: whose turn (ban vs pick), then how many actions/decks remain. Two
--- separate rows, always both present (unlike the composition badge, which is
--- conditional).
+-- Status: whose turn (ban vs pick) + how many actions/decks remain.
 local function build_status_rows(my_turn, is_pick, state, left)
 	local status_text
 	if not my_turn then
@@ -958,10 +963,12 @@ local function build_tile_grid(state, decorate)
 		end
 		deck_tile(item, state.banned[item_id(item)], cur_area, decorate)
 	end
-	-- Tiles are buttons, not hand cards: never draggable (dragging would dismiss the
-	-- hover popup mid-read; a held click must still register as a click). This MUST
-	-- run after every emplace -- CardArea:emplace -> set_ranks re-enables drag on
-	-- every card in the area, so a per-tile disable would only survive on the last.
+	-- Tiles are buttons, not hand cards: never draggable (click-holding one
+	-- would drag it around the panel and dismiss its hover popup mid-read;
+	-- with click-to-select, a slightly-held click must still be a click).
+	-- This MUST run after every emplace: CardArea:emplace -> set_ranks
+	-- re-enables drag on every card already in the area, so a per-tile
+	-- disable would only survive on the row's LAST tile.
 	for _, area in ipairs(areas) do
 		for _, card in ipairs(area.cards or {}) do
 			card.states.drag.can = false
