@@ -259,43 +259,49 @@ local function selection_randomize(state, rng)
 	return out
 end
 
--- Exposed for the standalone test harness (dev/test_banpick_selection.lua).
-BP._selection = {
-	needed = selection_needed,
-	contains = selection_contains,
-	toggle = selection_toggle,
-	prune = selection_prune,
-	randomize = selection_randomize,
-	list = function()
-		return _selected
-	end,
-	-- test seams: is blind-random armed? / the live UI strings / inject fake
-	-- tile areas so sync_selection_ui is coverable headless
-	armed = function()
-		return _random_armed
-	end,
-	ui = function()
-		return _sel_ui
-	end,
-	set_areas = function(areas)
-		_areas = areas
-	end,
-}
+-- Test-only seam (dev/test_banpick_selection.lua). Attached only under
+-- MPAPI._TEST so it is never present on shipped clients.
+if MPAPI._TEST then
+	BP._selection = {
+		needed = selection_needed,
+		contains = selection_contains,
+		toggle = selection_toggle,
+		prune = selection_prune,
+		randomize = selection_randomize,
+		list = function()
+			return _selected
+		end,
+		-- test seams: is blind-random armed? / the live UI strings / inject fake
+		-- tile areas so sync_selection_ui is coverable headless
+		armed = function()
+			return _random_armed
+		end,
+		ui = function()
+			return _sel_ui
+		end,
+		set_areas = function(areas)
+			_areas = areas
+		end,
+	}
+end
 
--- Test seam for the draft-identity guard (dev/test_banpick_events.lua).
-BP._draft_guard = {
-	current_draft = function()
-		return _current_draft_id
-	end,
-	is_dead = function(id)
-		return _dead_drafts[id] == true
-	end,
-	reset = function()
-		_current_draft_id = nil
-		_dead_drafts = {}
-		_draft_counter = 0
-	end,
-}
+-- Test-only seam for the draft-identity guard (dev/test_banpick_events.lua).
+-- Attached only under MPAPI._TEST so it is never present on shipped clients.
+if MPAPI._TEST then
+	BP._draft_guard = {
+		current_draft = function()
+			return _current_draft_id
+		end,
+		is_dead = function(id)
+			return _dead_drafts[id] == true
+		end,
+		reset = function()
+			_current_draft_id = nil
+			_dead_drafts = {}
+			_draft_counter = 0
+		end,
+	}
+end
 
 -----------------------------
 -- UI
@@ -502,12 +508,15 @@ local function build_stake_column(gathered)
 	return right
 end
 
--- Exposed for the standalone test harness (dev/test_banpick_selection.lua).
-BP._stake_column = {
-	gather = gather_stake_column,
-	build = build_stake_column,
-	release = release_stake_column,
-}
+-- Test-only seam (dev/test_banpick_selection.lua). Attached only under
+-- MPAPI._TEST so it is never present on shipped clients.
+if MPAPI._TEST then
+	BP._stake_column = {
+		gather = gather_stake_column,
+		build = build_stake_column,
+		release = release_stake_column,
+	}
+end
 
 -- Pure vertical-clamp decision for the hover popup (see card:hover). The engine's
 -- Moveable alignment flips a popup above/below its tile but only ever clamps
@@ -525,10 +534,13 @@ local function popup_clamp_y(y, h, room_h, edge)
 	return y
 end
 
--- Exposed for the standalone test harness (dev/test_banpick_popup_clamp.lua).
-BP._popup = {
-	clamp_y = popup_clamp_y,
-}
+-- Test-only seam (dev/test_banpick_popup_clamp.lua). Attached only under
+-- MPAPI._TEST so it is never present on shipped clients.
+if MPAPI._TEST then
+	BP._popup = {
+		clamp_y = popup_clamp_y,
+	}
+end
 
 -- Keep a hover popup on screen. Two mechanisms, since the engine treats still and
 -- moving anchors differently (Moveable:move gates move_with_major on `not STATIONARY

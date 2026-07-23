@@ -18,6 +18,7 @@
 -- ── Stubs to load the real module ───────────────────────────────────────────
 local warns = {}
 MPAPI = {
+	_TEST = true,
 	sendWarnMessage = function(msg) warns[#warns + 1] = msg end,
 }
 localize = function(k) return k end

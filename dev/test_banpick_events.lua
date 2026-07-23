@@ -12,7 +12,7 @@
 ]]
 
 -- ── Stubs ───────────────────────────────────────────────────────────────────
-MPAPI = { sendWarnMessage = function() end }
+MPAPI = { _TEST = true, sendWarnMessage = function() end }
 G = {
 	FUNCS = {},
 	C = { GREEN = 'green', MULT = 'mult', BLUE = 'blue', WHITE = 'white', BLACK = 'black', CLEAR = 'clear', UI = { BACKGROUND_INACTIVE = 'inactive', TEXT_LIGHT = 'light' } },
