@@ -36,13 +36,13 @@ local _areas = {}
 -- (so there is nothing to peek at or reroll-fish for).
 local _random_armed = false
 
--- Per-draft staleness guard: the host stamps each draft with a unique draft_id
--- and each broadcast with a per-draft serial carried ON the state. on_state
--- drops a state from a dead (completed/superseded) draft, or a serial below the
--- draft's watermark; a new draft_id resets the watermark; an equal serial
--- re-applies (reconnect / QoS1 re-delivery). No draft_id (older host) = accept.
+-- Per-draft identity guard: the host stamps each draft with a unique draft_id
+-- carried ON the state. on_state drops a state from a dead (completed or
+-- superseded) draft; a new draft_id supersedes the old one. No draft_id
+-- (older host) = accept. State is a full snapshot, so a duplicate just
+-- re-applies harmlessly -- no per-message sequencing (consistent with every
+-- other synced state).
 local _current_draft_id = nil
-local _last_serial = 0
 local _dead_drafts = {}
 local _draft_counter = 0
 
@@ -275,11 +275,8 @@ BP._selection = {
 	end,
 }
 
--- Test seam for the broadcast staleness guard (dev/test_banpick_events.lua).
-BP._serial = {
-	last = function()
-		return _last_serial
-	end,
+-- Test seam for the draft-identity guard (dev/test_banpick_events.lua).
+BP._draft_guard = {
 	current_draft = function()
 		return _current_draft_id
 	end,
@@ -288,7 +285,6 @@ BP._serial = {
 	end,
 	reset = function()
 		_current_draft_id = nil
-		_last_serial = 0
 		_dead_drafts = {}
 		_draft_counter = 0
 	end,
@@ -1106,16 +1102,6 @@ function BP.broadcast_state(lobby)
 		return
 	end
 	local s = lobby._ban_pick
-	-- Stamp the per-draft serial ON the state: the host's own broadcast loops
-	-- back through on_state and REPLACES lobby._ban_pick, so the counter must
-	-- ride the wire. Serials are scoped to this draft (draft_id resets the
-	-- watermark on every client), so a plain increment is correct.
-	if s then
-		s.serial = (s.serial or 0) + 1
-		-- The host IS the authority: advance its own watermark at stamp time so a
-		-- stale redelivery arriving before the loopback still drops.
-		_last_serial = s.serial
-	end
 	lobby:action(action_type):broadcast({ state = s })
 end
 
@@ -1224,28 +1210,19 @@ function BP.on_state(lobby, state)
 	if not state then
 		return
 	end
-	-- Staleness guard, scoped by draft_id (see the module-local comment).
-	-- `<` (not `<=`) on the watermark keeps the reconnect refresh working -- a
-	-- QoS1 re-delivery of the CURRENT state applies again.
+	-- Draft-identity guard, scoped by draft_id (see the module-local comment).
 	if state.draft_id then
 		if _dead_drafts[state.draft_id] then
 			return
 		end
 		if state.draft_id ~= _current_draft_id then
-			-- First sight of a new draft (possibly from a different host whose
-			-- serial counter is unrelated to anything seen before): supersede the
-			-- old draft and reset the watermark.
+			-- First sight of a new draft (possibly from a different host):
+			-- supersede the old draft so a late duplicate of it can't reappear.
 			if _current_draft_id then
 				_dead_drafts[_current_draft_id] = true
 			end
 			_current_draft_id = state.draft_id
-			_last_serial = 0
 		end
-		local serial = state.serial or 0
-		if serial < _last_serial then
-			return
-		end
-		_last_serial = serial
 	end
 	lobby._ban_pick = state
 
@@ -1314,14 +1291,13 @@ function BP.start(lobby, config, on_complete)
 		_dead_drafts[_current_draft_id] = true
 	end
 	_current_draft_id = nil
-	_last_serial = 0
 
 	if lobby.is_host then
 		local pool = (config.build_pool and config.build_pool()) or default_build_pool(config.pool_size)
 		local schedule = config.schedule or derive_schedule(config.pool_size or #pool, config.keep or 1)
 		-- Unique per draft: host id + wall clock + session counter. Guests scope
-		-- their staleness watermark to this id, so serials are never compared
-		-- across drafts or across hosts.
+		-- the draft-identity guard to this id, so it is never compared across
+		-- drafts or across hosts.
 		_draft_counter = _draft_counter + 1
 		local draft_id = tostring(lobby.player_id) .. '#' .. tostring(os.time()) .. '#' .. tostring(_draft_counter)
 		_current_draft_id = draft_id

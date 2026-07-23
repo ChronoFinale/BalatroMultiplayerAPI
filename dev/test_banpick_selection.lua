@@ -250,7 +250,7 @@ MPAPI.get_current_lobby = function()
 	return GUEST
 end
 MPAPI.ActionTypes = { test_state = { key = 'test_state' }, test_ban = { key = 'test_ban' } }
-BP._serial.reset()
+BP._draft_guard.reset()
 BP.start(GUEST, {
 	schedule = { { actor = 1, action = 'ban', count = 2 } },
 	state_action = 'test_state',
@@ -259,7 +259,6 @@ BP.start(GUEST, {
 }, function() end)
 -- Host's broadcast: guest's turn (first = 2 makes actor 1 resolve to order[2]).
 BP.on_state(GUEST, {
-	serial = 1,
 	pool = { unpack(POOL) },
 	banned = {},
 	order = { 'host', 'guest' },
