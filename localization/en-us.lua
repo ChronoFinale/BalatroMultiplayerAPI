@@ -51,7 +51,7 @@ return {
 			k_chat_ready_dp = '[MultiplayerAPI] Chat ready. Open console with / or T',
 			k_chat_ready = '[MultiplayerAPI] Chat ready. Press T to open',
 			k_chat_not_sent = '[!] Not delivered to other players:',
-			k_chat_sent_as = '[!] Filtered — delivered to others as:',
+			k_chat_sent_as = '[!] Filtered - delivered to others as:',
 			-- Moderation actions (report overlay / mute — slash commands removed)
 			k_chat_report_sent = '[MultiplayerAPI] Reported to moderators:',
 			k_chat_muted = '[MultiplayerAPI] Muted for this session:',
