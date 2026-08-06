@@ -24,15 +24,12 @@ MPAPI.connection_state = {
 	tos_is_update = false,
 	chat_enabled = false,
 	chat_blocked = false,
+	mute_list = {},
 }
 
 C.update_display_name = function()
 	if MPAPI.connection_state.state ~= MPAPI.ConnectionState.CONNECTED then
-		if MPAPI.connection_state.state == MPAPI.ConnectionState.LOGIN_AVAILABLE then
-			MPAPI.connection_state.display_name = localize('b_log_in')
-		else
-			MPAPI.connection_state.display_name = localize('b_retry_connection')
-		end
+		MPAPI.connection_state.display_name = localize('b_retry_connection')
 	elseif C.connection and C.connection.display_name then
 		MPAPI.connection_state.display_name = MPAPI.truncate(C.connection.display_name, 20)
 	elseif MPAPI.connection_state.steam_name ~= '' then
@@ -59,6 +56,7 @@ C.reset_state_vars = function()
 	MPAPI.connection_state.privileges = nil
 	MPAPI.connection_state.chat_enabled = false
 	MPAPI.connection_state.chat_blocked = false
+	MPAPI.connection_state.mute_list = {}
 end
 
 C.set_status_text = function()

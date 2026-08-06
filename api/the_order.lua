@@ -4,26 +4,36 @@
 -- Flag
 -----------------------------
 
+-- §20: generic extension points, same idiom as MPAPI.register_mod_isolation
+-- (api/layers/pool_gating.lua) -- a platform file exposes a registry, and a
+-- consuming mod (PvP, or any future one) registers its own predicate, instead
+-- of this file branching on a PVP-specific global directly.
+MPAPI._order_gates = MPAPI._order_gates or {}
+function MPAPI.register_order_gate(fn)
+	MPAPI._order_gates[#MPAPI._order_gates + 1] = fn
+end
+
+MPAPI._voucher_queue_gates = MPAPI._voucher_queue_gates or {}
+function MPAPI.register_voucher_queue_gate(fn)
+	MPAPI._voucher_queue_gates[#MPAPI._voucher_queue_gates + 1] = fn
+end
+
 function MPAPI.should_use_the_order()
 	if MPAPI.is_layer_active('the_order') then return true end
-	-- MP compat: MP rulesets gate via MP.LOBBY.config.the_order rather than the MPAPI layer chain.
-	-- Mirrors MP's own (former) MP.should_use_the_order exactly: practice mode always uses
-	-- the order; otherwise a lobby with the_order enabled does.
-	local mp = rawget(_G, 'MP')
-	if mp then
-		if mp.is_practice_mode and mp.is_practice_mode() then return true end
-		if mp.LOBBY and mp.LOBBY.config and mp.LOBBY.config.the_order and mp.LOBBY.code ~= nil then
-			return true
-		end
+	for _, gate in ipairs(MPAPI._order_gates) do
+		if gate() then return true end
 	end
 	return false
 end
 
--- MP compat: some MP rulesets (major league) want the culled/stable voucher queue below
--- without the full Order treatment, so the voucher hooks additionally gate on this.
+-- Some consumers (PvP's major-league ruleset) want the culled/stable voucher
+-- queue below without the full Order treatment, so the voucher hooks
+-- additionally gate on this.
 local function mp_major_league()
-	local mp = rawget(_G, 'MP')
-	return (mp and mp.is_major_league_ruleset and mp.is_major_league_ruleset()) or false
+	for _, gate in ipairs(MPAPI._voucher_queue_gates) do
+		if gate() then return true end
+	end
+	return false
 end
 
 -----------------------------

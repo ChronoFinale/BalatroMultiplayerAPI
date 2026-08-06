@@ -2,9 +2,9 @@ local api_client = MPAPI.networking.api_client
 
 -- Phase 6 (compact action log): download a stored run's replay -- returns
 -- {run={...}, logs=[{playerId, compressedEvents, carbonHash, eventCount, status}]}.
--- `compressedEvents` is still gzip+base64 (MP.UTILS.decompress_str, then
--- json.decode); the caller (e.g. PvP's ghost_replay.lua) is responsible for
--- turning the decoded event array into a replay via LOG_PARSER.carbon_to_replay.
+-- `compressedEvents` is still gzip+base64 (MPAPI.decompress_str, then
+-- MPAPI.json_decode) -- the caller merges every player's decoded event array
+-- into one timeline via MPAPI.playback.build_timeline (api/playback/timeline.lua).
 function api_client:get_replay(token, run_id, callback)
 	if not self:_transport_ready() then
 		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
@@ -12,6 +12,23 @@ function api_client:get_replay(token, run_id, callback)
 	end
 	self:_setup_json_callback(callback)
 	self.mqtt:http_get_auth(self.base_url .. '/api/runs/' .. run_id .. '/replay', token)
+end
+
+-- §22.2 (+pagination): a player's own past run ids (GET /api/runs/mine) --
+-- the discovery step a "My Matches" replay list needs. opts = {page=,
+-- page_size=} (both optional; server defaults to page 1, pageSize 20).
+-- Returns {runs = [{id, lobbyCode, modId, lobbyType, status, startedAt,
+-- finalizedAt}, ...], total, page, pageSize}.
+function api_client:get_my_runs(token, opts, callback)
+	if not self:_transport_ready() then
+		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
+		return
+	end
+	self:_setup_json_callback(callback)
+	opts = opts or {}
+	local url = self.base_url .. '/api/runs/mine?page=' .. tostring(opts.page or 1)
+		.. '&pageSize=' .. tostring(opts.page_size or 20)
+	self.mqtt:http_get_auth(url, token)
 end
 
 -- Phase 7 (live spectating): request a short-lived spectator token scoped to
@@ -25,23 +42,4 @@ function api_client:spectate_lobby(token, code, callback)
 	end
 	self:_setup_json_callback(callback)
 	self.mqtt:http_get_auth(self.base_url .. '/api/lobbies/' .. code .. '/spectate', token)
-end
-
--- Phase 9 (reconnect tail-replay): fetch `player_id`'s buffered game_log_event
--- stream for `lobby_code` since `since_t` (their own elapsed-ms marker, see
--- MP.RLOG._last_seen_t) -- reads the server's LIVE in-memory buffer, not a
--- finalized run, since the match is still active. Returns {events=[{t,
--- opcode, args}, ...]}, [] when nothing new. Used by a reconnecting client to
--- catch up on the opponent's actions broadcast while it was disconnected
--- (MQTT doesn't backlog non-retained topic messages).
-function api_client:get_tail(token, lobby_code, player_id, since_t, callback)
-	if not self:_transport_ready() then
-		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'MQTT thread not running'), nil)
-		return
-	end
-	self:_setup_json_callback(callback)
-	self.mqtt:http_get_auth(
-		self.base_url .. '/api/runs/' .. lobby_code .. '/players/' .. player_id .. '/tail?since_t=' .. tostring(since_t),
-		token
-	)
 end

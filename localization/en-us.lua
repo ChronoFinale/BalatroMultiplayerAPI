@@ -17,7 +17,6 @@ return {
 			k_steam_username = 'Steam Username',
 			k_discord_username = 'Discord Username',
 			k_display_name = 'Display Name',
-			k_auto_login = 'Auto Login',
 			k_steam = 'Steam',
 			k_discord = 'Discord',
 			k_link_discord = 'Link Discord',
@@ -37,7 +36,6 @@ return {
 			b_open_download_page = 'Open Download Page',
 			b_coming_soon = 'Coming Soon',
 			b_retry_connection = 'Retry Connection',
-			b_log_in = 'Log In',
 			b_view_notice = 'View Privacy & Terms Notice',
 			b_create_account = 'Create Account',
 			b_sign_up = 'Sign Up',
@@ -45,27 +43,47 @@ return {
 			b_i_accept = 'I Accept',
 			b_i_decline = 'I Decline',
 			k_you = 'You',
-			-- Chat notice prefix rule: '[!] ' marks an outcome that didn't match
-			-- the player's expectation (not delivered, filtered, muted, chat
-			-- unavailable); '[MultiplayerAPI]' is reserved for once-per-session
-			-- ready/compat banners.
-			k_chat_not_enabled = '[!] Chat is not enabled. You can enable it in the account overlay on the main menu.',
-			k_chat_lobby_only = '[!] Chat is only available while in a lobby.',
-			k_chat_dp_compat_info = '[MultiplayerAPI] For compatibility with DebugPlus, all DebugPlus commands must be prefixed with /. Anything sent without a / will be sent as a chat message.',
-			k_chat_ready_dp = '[MultiplayerAPI] Chat ready. Open console with / or T',
+			k_chat_not_enabled = '[MultiplayerAPI] Chat is not enabled. You can enable it in the account overlay on the main menu.',
+			k_chat_lobby_only = '[MultiplayerAPI] Chat is only available while in a lobby.',
+			k_chat_dp_compat_info = '[MultiplayerAPI] For compatibility with DebugPlus, use /say <message> to send a chat message. Everything else is treated as a DebugPlus command.',
+			k_chat_ready_dp = '[MultiplayerAPI] Chat ready. Open console with / or T, then use /say <message>',
 			k_chat_ready = '[MultiplayerAPI] Chat ready. Press T to open',
-			k_chat_unknown_command = '[!] Unknown command',
-			-- Frame only -- no claim about why or for how long. The reason
-			-- appended after it is the server's own self-contained sentence
-			-- (or, when the server gave none, k_chat_reason_unavailable), so
-			-- the frame must not restate that reason or presume it's
-			-- temporary: some reasons are (rate limited), some aren't (muted,
-			-- a chat-wide outage).
-			k_chat_not_sent = '[!] Not sent',
-			k_chat_sent_as = '[!] Other players saw:',
+			k_chat_say_usage = '[MultiplayerAPI] Usage: /say <message>',
+			k_chat_unknown_command = 'Unknown command',
+			-- Account overlay tab strip
+			k_account_tab_account = 'Account',
+			k_account_tab_chat = 'Chat',
+			k_account_tab_history = 'Match History',
+			-- Chat tab: respectful-use blurb
+			k_chat_respectful_use_title = 'Chatting Respectfully',
+			k_chat_respectful_use_1 = 'Messages are filtered automatically and can be reviewed if reported.',
+			k_chat_respectful_use_2 = 'Harassment, abuse, or cheating talk can get your account suspended.',
+			k_chat_respectful_use_3 = 'Keep it friendly, everyone is here to enjoy the game.',
+			-- Match history tab
+			k_match_history_loading = 'Loading matches...',
+			k_match_history_empty = 'No matches yet.',
+			k_match_history_error = "Couldn't load match history.",
+			b_match_history_retry = 'Retry',
+			b_view_log = 'View Log',
+			b_view_replay = 'View Replay',
+			b_match_history_prev = 'Prev',
+			b_match_history_next = 'Next',
+			k_match_history_page_label = 'Page',
+			k_match_status_active = 'In Progress',
+			k_match_status_completed = 'Completed',
+			k_match_status_abandoned = 'Abandoned',
+			k_match_status_terminated = 'Terminated',
+			-- Delivery outcomes for a message the player already saw echoed.
+			-- The frame makes no claim about why or for how long: the reason
+			-- appended after it is the server's own self-contained sentence,
+			-- or k_chat_reason_unavailable when the server gave none.
+			k_chat_not_sent = '[MultiplayerAPI] Not sent',
+			k_chat_sent_as = '[MultiplayerAPI] Other players saw:',
 			k_chat_reason_unavailable = 'Something went wrong. Try again.',
 			-- Chat section in account overlay
 			k_chat_section_title = 'Chat',
+			b_chat_on = 'On',
+			b_chat_off = 'Off',
 			k_chat_status_enabled = 'Chat is enabled',
 			k_chat_status_blocked = 'Chat access is permanently restricted',
 			k_chat_status_none = 'Chat is not set up',
@@ -86,8 +104,19 @@ return {
 			b_queue_guard_leave = 'Leave Queue',
 			b_queue_guard_stay = 'Stay Queued',
 			-- In-game chat feedback
-			k_chat_age_blocked = '[!] Chat is not available for your account.',
-			k_chat_client_disabled = '[!] Chat is disabled. Re-enable it in the account overlay.',
+			k_chat_age_blocked = '[MultiplayerAPI] Chat is not available for your account.',
+			k_chat_client_disabled = '[MultiplayerAPI] Chat is disabled. Re-enable it in the account overlay.',
+			-- Player mute overlay (lobby player list)
+			k_mute_player = 'Mute Player',
+			k_unmute_player = 'Unmute Player',
+			-- Player report overlay (lobby player list)
+			k_report_player = 'Report Player',
+			k_report_cheating = 'Cheating',
+			k_report_chat_abuse = 'Chat Abuse',
+			k_report_griefing = 'Griefing',
+			k_report_inappropriate_username = 'Inappropriate Username',
+			k_report_other = 'Other',
+			k_report_submitted = 'Report submitted',
 			k_join_lobby_cap = 'JOIN LOBBY',
 			k_lobby_code_cap = 'LOBBY CODE',
 			k_copied_cap = 'COPIED!',
@@ -131,9 +160,20 @@ return {
 			k_banpick_confirm_pick = 'Confirm Pick',
 			k_banpick_confirm_random = 'Confirm Random',
 			k_banpick_random = 'Random',
-			k_banpick_cancel_random = 'Cancel Random',
-			k_banpick_weekly_mix = 'A rotating 3-deck mix',
-			k_cocktail_suffix = 'Cocktail',
+			-- End-screen Ko-fi plug (MPAPI.end_screen_uibox, api/end_screen.lua) -- shared by
+			-- every gamemode's win/lose screen, not just PvP's (where these two keys used to
+			-- live exclusively). Without PvP loaded, end_screen_uibox's localize('ml_mp_kofi_message')[3]
+			-- lookup returned nil and crashed string concatenation, which the pcall in
+			-- MPAPI.end_screen_show silently swallowed -- so SPDRN's own custom win/lose
+			-- overlay never got built, and the vanilla Game Over/win screen showed instead.
+			-- Reproduced live driving SPDRN practice mode with MultiplayerPvP removed from Mods/.
+			ml_mp_kofi_message = {
+				'This game server is',
+				'funded by the community,',
+				'if you enjoy BMP',
+				'consider',
+			},
+			b_mp_kofi_button = 'Supporting me on Ko-fi',
 		},
 	},
 	descriptions = {

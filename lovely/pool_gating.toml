@@ -1,0 +1,51 @@
+[manifest]
+version = "1.0.0"
+dump_lua = true
+priority = 2147483600
+
+# Pool exclusion hook for RNG-safe removal:
+# pop the just-added entry, but only decrement _pool_size when it was a real key
+# banned keys hit the 'UNAVAILABLE' branch and need their slot preserved so the pseudorandom pool
+# queue stays aligned across clients and versions
+# unfortunate timing but lua doesn't have continue, so this is an uninvasive patch
+[[patches]]
+[patches.pattern]
+target = "functions/common_events.lua"
+pattern = '''
+	_pool[#_pool + 1] = 'UNAVAILABLE'
+end
+'''
+position = "after"
+payload = '''
+if MPAPI.should_exclude_from_pool(v) then
+	table.remove(_pool) -- remove whatever was just done
+	if add and not G.GAME.banned_keys[v.key] then
+		_pool_size = _pool_size - 1
+	end
+end
+'''
+match_indent = true
+
+# §9.4: get_new_boss() is a separate eligibility loop with no should_exclude_from_pool
+# call at all -- it only ever checked G.GAME.banned_keys (explicit bans), never layer
+# membership. This mirrors that same check right alongside the existing banned_keys
+# loop, so a blind whose only gating is being in an inactive layer is excluded from
+# boss selection exactly like a reworked joker/consumable/voucher/enhancement already is.
+[[patches]]
+[patches.pattern]
+target = "functions/common_events.lua"
+pattern = '''
+    for k, v in pairs(G.GAME.banned_keys) do
+        if eligible_bosses[k] then eligible_bosses[k] = nil end
+    end
+'''
+position = "after"
+payload = '''
+for k in pairs(eligible_bosses) do
+	local blind_center = G.P_BLINDS[k]
+	if blind_center and MPAPI.should_exclude_from_pool(blind_center) then
+		eligible_bosses[k] = nil
+	end
+end
+'''
+match_indent = true

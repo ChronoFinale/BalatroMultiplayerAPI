@@ -8,14 +8,18 @@
 -- and request actions; they never mutate state locally.
 --
 -- Two draft shapes are supported through one engine:
---   * Legacy: `config = { pool_size, keep }` -> alternating single bans down to `keep`
---     (this is what the Speedrun mod uses; unchanged behaviour aside from random first).
+--   * Legacy: `config = { pool_size, keep }` -> alternating single bans down to `keep`,
+--     rotating through every player in the lobby (2 for a plain 1v1, more for an
+--     N-player draft -- §17.7; this is what the Speedrun mod uses).
 --   * Scheduled: `config.schedule = { { actor=1|2, action='ban'|'pick', count=N }, ... }`
---     -> arbitrary per-turn ban counts and a final 'pick' (the picked item wins).
+--     -> arbitrary per-turn ban counts and a final 'pick' (the picked item wins). Actor
+--     numbers here are still author-written turn slots (1..N), resolved the same way
+--     as the legacy shape's derived schedule.
 --
 -- Pool items may be plain center KEYS ('b_red') or tables `{ key='b_red', ... }` carrying
 -- metadata (e.g. a stake); `config.decorate_tile(card, item)` lets the consumer decorate
--- each tile (e.g. stamp a stake sticker). The FIRST actor is always randomized.
+-- each tile (e.g. stamp a stake sticker). The first actor is always randomized among
+-- however many players are actually in the draft.
 --
 -- The two networked actions live in the *consuming* mod (a lobby only routes ActionTypes
 -- whose mod.id matches -- see api/lobby.lua). The caller passes their keys via
@@ -58,7 +62,26 @@ local _draft_counter = 0
 -----------------------------
 
 -- Pool items are either a plain key string or a { key = ..., <meta> } table.
+-- `id`, when present, is the draft-tracking identity instead of `key` -- lets
+-- a pool item's *rendered art* (key, a real G.P_CENTERS deck-back) repeat
+-- across items while each item still bans/picks independently. Needed once a
+-- pool has more real candidates than there are distinct deck-back keys to
+-- assign one-to-one (e.g. Challenge's full G.CHALLENGES list, 20+ vanilla
+-- entries against only 15 vanilla deck backs) -- without `id`, items sharing
+-- one `key` would all get banned together the instant any one of them is
+-- banned (this is exactly what forced Challenge's pool to be truncated to a
+-- random 5 previously: 5 fits inside 15 distinct keys, the full list doesn't).
 local function item_key(item)
+	if type(item) == "table" then
+		return item.id or item.key
+	end
+	return item
+end
+
+-- The G.P_CENTERS key used to render a pool item's tile art -- always
+-- item.key (or the item itself, if a plain string), even when item_key()
+-- above resolves to a different tracking identity via item.id.
+local function item_art_key(item)
 	if type(item) == "table" then
 		return item.key
 	end
@@ -96,19 +119,24 @@ local function default_build_pool(size)
 	return pool
 end
 
--- Legacy schedule: `pool_size - keep` alternating single bans, no pick.
-local function derive_schedule(pool_size, keep)
+-- Legacy schedule: `pool_size - keep` alternating single bans, no pick, rotating
+-- through however many actors are actually in the draft (2 for a plain 1v1,
+-- more for §17.7's N-player rotation -- see resolve_actor below for the
+-- matching actor->player-id resolution).
+local function derive_schedule(pool_size, keep, num_actors)
+	num_actors = math.max(1, num_actors or 2)
 	local bans = math.max(0, (pool_size or 0) - (keep or 1))
 	local sched = {}
 	for i = 1, bans do
-		sched[i] = { actor = ((i - 1) % 2) + 1, action = "ban", count = 1 }
+		sched[i] = { actor = ((i - 1) % num_actors) + 1, action = "ban", count = 1 }
 	end
 	return sched
 end
 
 -- Turn order: host first (order[1] == host, so guest ban routing via send(order[1],...)
--- is stable), then others by sorted id. `state.first` (1|2) picks which order slot is the
--- logical actor 1, so the *acting* first player is randomized independently of routing.
+-- is stable), then others by sorted id. `state.first` (1..#order) picks which order slot
+-- is the logical actor 1, so the *acting* first player is randomized independently of
+-- routing -- for an N-player draft this rotates through every slot, not just the two.
 local function build_order(lobby)
 	local order = { lobby.player_id }
 	local others = {}
@@ -124,8 +152,16 @@ local function build_order(lobby)
 	return order
 end
 
+-- §17.7: generalized to however many players are actually in state.order
+-- (build_order already returns every lobby member, not just 2 -- only this
+-- resolution math was hardcoded to a 2-slot draft). state.first (1..#order)
+-- picks which order slot is logical actor 1; every other actor rotates
+-- forward from there. Reduces to the exact previous 2-actor formula
+-- (3 - state.first) when #order == 2, so every existing 1v1 draft is
+-- unaffected.
 local function resolve_actor(state, actor)
-	local slot = (actor == 1) and (state.first or 1) or (3 - (state.first or 1))
+	local n = #state.order
+	local slot = ((state.first or 1) - 1 + (actor - 1)) % n + 1
 	return state.order[slot]
 end
 
@@ -773,7 +809,7 @@ end
 local function deck_tile(item, banned, area, decorate)
 	local key = item_key(item)
 	local id = item_id(item)
-	local center = G.P_CENTERS[key]
+	local center = G.P_CENTERS[item_art_key(item)]
 	local card = Card(
 		area.T.x + area.T.w / 2,
 		area.T.y,
@@ -1290,7 +1326,8 @@ function BP.start(lobby, config, on_complete)
 
 	if lobby.is_host then
 		local pool = (config.build_pool and config.build_pool()) or default_build_pool(config.pool_size)
-		local schedule = config.schedule or derive_schedule(config.pool_size or #pool, config.keep or 1)
+		local order = build_order(lobby)
+		local schedule = config.schedule or derive_schedule(config.pool_size or #pool, config.keep or 1, #order)
 		-- Unique per draft: host id + wall clock + session counter. Guests scope
 		-- the draft-identity guard to this id, so it is never compared across
 		-- drafts or across hosts.
@@ -1302,8 +1339,8 @@ function BP.start(lobby, config, on_complete)
 			pool = pool,
 			banned = {},
 			ban_order = {},
-			order = build_order(lobby),
-			first = math.random(2),
+			order = order,
+			first = math.random(#order),
 			schedule = schedule,
 			sched_index = 1,
 			sched_remaining = schedule[1] and schedule[1].count or 0,

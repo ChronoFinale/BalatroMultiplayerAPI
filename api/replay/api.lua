@@ -11,6 +11,19 @@ MPAPI.replay.get = function(run_id, callback)
 	conn.api:get_replay(conn.jwt_token, run_id, callback)
 end
 
+-- §22.2 (+pagination): the player's own past run ids. opts = {page=,
+-- page_size=} (both optional; server defaults to page 1, pageSize 20).
+-- callback(err, data) where data is {runs = [{id, lobbyCode, modId,
+-- lobbyType, status, startedAt, finalizedAt}, ...], total, page, pageSize}.
+MPAPI.replay.list_mine = function(opts, callback)
+	local conn = MPAPI.get_connection()
+	if not conn then
+		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'Not connected'), nil)
+		return
+	end
+	conn.api:get_my_runs(conn.jwt_token, opts, callback)
+end
+
 -- Phase 7: request a spectator token + one-time snapshot for a lobby.
 -- callback(err, data) where data is {token, snapshot}.
 MPAPI.replay.spectate_lobby = function(code, callback)
@@ -22,13 +35,13 @@ MPAPI.replay.spectate_lobby = function(code, callback)
 	conn.api:spectate_lobby(conn.jwt_token, code, callback)
 end
 
--- Phase 9: fetch a player's buffered game_log_event stream for a lobby since
--- `since_t`. callback(err, data) where data is {events=[{t, opcode, args}, ...]}.
-MPAPI.replay.get_tail = function(lobby_code, player_id, since_t, callback)
+-- §22.3: which live lobbies are currently spectatable. callback(err, data)
+-- where data is {lobbies = [{code, modId, playerCount}, ...]}.
+MPAPI.replay.list_spectatable = function(callback)
 	local conn = MPAPI.get_connection()
 	if not conn then
 		callback(MPAPI.make_error(MPAPI.ErrorKind.NOT_CONNECTED, 'Not connected'), nil)
 		return
 	end
-	conn.api:get_tail(conn.jwt_token, lobby_code, player_id, since_t, callback)
+	conn.api:list_spectatable(conn.jwt_token, callback)
 end

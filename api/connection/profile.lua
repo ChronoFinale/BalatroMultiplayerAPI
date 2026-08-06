@@ -69,6 +69,60 @@ MPAPI._internal.set_preferred_joker = function(value, callback)
 	end)
 end
 
+-- Optimistic local update (matches set_preferred_joker/enable_chat's pattern):
+-- on success, apply the change to conn.mute_list/MPAPI.connection_state.mute_list
+-- directly from the server's returned mutedPlayerIds, rather than re-fetching.
+MPAPI._internal.mute_player = function(target_id, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:mute_player(conn.jwt_token, target_id, function(err, data)
+		if err then
+			callback(err, nil)
+			return
+		end
+
+		conn.mute_list = conn.mute_list or {}
+		conn.mute_list[target_id] = true
+		MPAPI.connection_state.mute_list = conn.mute_list
+
+		callback(nil, data)
+	end)
+end
+
+MPAPI._internal.unmute_player = function(target_id, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:unmute_player(conn.jwt_token, target_id, function(err, data)
+		if err then
+			callback(err, nil)
+			return
+		end
+
+		conn.mute_list = conn.mute_list or {}
+		conn.mute_list[target_id] = nil
+		MPAPI.connection_state.mute_list = conn.mute_list
+
+		callback(nil, data)
+	end)
+end
+
+-- No optimistic local-state mutation needed here (unlike mute) -- a report has
+-- no persistent client-visible cache to keep in sync.
+MPAPI._internal.report_player = function(code, target_id, report_type, message, callback)
+	local conn = require_connected(callback)
+	if not conn then
+		return
+	end
+
+	conn.api:report_player(conn.jwt_token, code, target_id, report_type, message, callback)
+end
+
 MPAPI._internal.unlink_discord = function(callback)
 	local conn = require_connected(callback)
 	if not conn then

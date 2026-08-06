@@ -124,14 +124,11 @@ MPAPI.connect = function(opts)
 		mqtt_client = C.mqtt_instance,
 		api_client = api,
 		steam = MPAPI.networking.steam,
-		token_store = MPAPI.networking.token_store,
 		config = {
 			mqtt_broker = mqtt_broker,
 			mqtt_port = mqtt_port,
 			mqtt_secure = mqtt_secure,
-			force_login = opts.force_login or false,
 			dev_name = opts.dev_name or nil,
-			auto_login = MPAPI.config.auto_login ~= false,
 		},
 	})
 
@@ -217,6 +214,7 @@ connection_on_state_change = function(new_state, context)
 		MPAPI.connection_state.privileges = C.connection.privileges
 		MPAPI.connection_state.chat_enabled = C.connection.chat_enabled or false
 		MPAPI.connection_state.chat_blocked = C.connection.chat_blocked or false
+		MPAPI.connection_state.mute_list = C.connection.mute_list or {}
 	end
 	C.set_status_text()
 
@@ -257,8 +255,6 @@ log_state_update = function(new_state, context)
 		MPAPI.sendDebugMessage('Disconnected from server')
 	elseif new_state == MPAPI.ConnectionState.TOS_REQUIRED then
 		MPAPI.sendDebugMessage('ToS acceptance required for: ' .. tostring(context.steam_name))
-	elseif new_state == MPAPI.ConnectionState.LOGIN_AVAILABLE then
-		MPAPI.sendDebugMessage('Login available (auto-login off) for: ' .. tostring(context.steam_name))
 	elseif new_state == MPAPI.ConnectionState.AUTHENTICATING then
 		MPAPI.sendDebugMessage('Authenticating...')
 	elseif new_state == MPAPI.ConnectionState.CONNECTING then
