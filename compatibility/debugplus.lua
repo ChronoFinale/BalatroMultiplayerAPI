@@ -84,6 +84,11 @@ local function patch(dp_console, orig_render)
 					-- No / prefix → send as chat
 					if M.send_fn then
 						M.send_fn(text)
+					elseif MPAPI.connection_state.chat_enabled then
+						-- Chat is enabled server-side but we're not in a lobby
+						-- (send_fn only exists while lobby chat is active) --
+						-- mirrors chat.lua's make_not_enabled_cb branch.
+						M.addMessage(localize('k_chat_lobby_only'), COLOUR_SYSTEM)
 					else
 						M.addMessage(localize('k_chat_not_enabled'), COLOUR_SYSTEM)
 					end

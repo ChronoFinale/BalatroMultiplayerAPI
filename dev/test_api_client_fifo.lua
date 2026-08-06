@@ -24,11 +24,15 @@ MPAPI = {
 
 local LEAVE_BODY = 'LEAVE_RESPONSE'
 local JOIN_BODY = 'JOIN_RESPONSE'
+local CHAT_OK_BODY = 'CHAT_OK_RESPONSE'
+local CHAT_BLOCKED_BODY = 'CHAT_BLOCKED_RESPONSE'
 json = {
 	encode = function(_) return '{}' end,
 	decode = function(s)
 		if s == LEAVE_BODY then return { left = true } end
 		if s == JOIN_BODY then return { token = 'jwt-xyz', lobby = { code = 'ABC' } } end
+		if s == CHAT_OK_BODY then return { ok = true } end
+		if s == CHAT_BLOCKED_BODY then return { error = 'blocked' } end
 		return nil
 	end,
 }
@@ -154,6 +158,51 @@ check(#client4._queue == 0, 'queue emptied by the flush')
 client4.mqtt.thread = nil -- what update() sets on crash
 client4:join_lobby('tok', 'ABC', function(err) refused_err = err end)
 check(refused_err ~= nil and refused_err.kind == 'NOT_CONNECTED', 'new requests refused once the thread is gone')
+
+-- ── FIXED: overlapping chat sends each get their own response body ──────────
+-- Regression for 9b578f7, which reverted send_chat_message (and
+-- set_lobby_metadata, enable_chat) to a single pending_callback slot -- the
+-- exact pattern this file's control case reproduces. Two chat sends close
+-- together (the fast-typing case that triggers rate limiting) must not cross
+-- callbacks: the send that got blocked has to reach ITS sender, not the other
+-- one's.
+print()
+print('-- fixed: overlapping chat sends each get their own response body --')
+local chat_client = AC.new(make_fake_mqtt(), 'http://x')
+local first_res, second_res
+chat_client:send_chat_message('tok', 'ABC', 'hello', function(err, data) first_res = { err = err, data = data } end)
+chat_client:send_chat_message('tok', 'ABC', 'blocked text', function(err, data) second_res = { err = err, data = data } end)
+
+check(#chat_client._queue == 2, 'both chat sends enqueued (neither clobbered the other)')
+
+-- Worker returns responses in send order: first message allowed (200), second blocked (403).
+chat_client.mqtt.on_http_response(200, CHAT_OK_BODY)
+chat_client.mqtt.on_http_response(403, CHAT_BLOCKED_BODY)
+
+check(first_res ~= nil and first_res.err == nil and first_res.data.ok == true, 'first send got its own success response')
+check(
+	second_res ~= nil and second_res.err ~= nil and second_res.err.kind == 'SERVER' and second_res.err.message == 'blocked',
+	'second send got its own error response -- the blocked message is not silently dropped'
+)
+
+-- ── FIXED: a non-JSON 5xx body is TRANSPORT, not a leaked SERVER reason ─────
+-- Bug: send_chat_message tagged every non-2xx status as ErrorKind.SERVER
+-- regardless of body, so chat.lua's `err.kind ~= SERVER` guard (meant to hide
+-- transport/proxy jargon behind a clean fallback) never caught a non-JSON
+-- 5xx -- e.g. a proxy error page -- and the raw text reached the player. Only
+-- a decoded { error = "..." } body is genuine human-readable copy; anything
+-- else must fall back to TRANSPORT so the client shows its own clean message.
+print()
+print('-- fixed: non-JSON 5xx body is TRANSPORT, not a leaked SERVER reason --')
+local chat_client2 = AC.new(make_fake_mqtt(), 'http://x')
+local bad_gateway_res
+chat_client2:send_chat_message('tok', 'ABC', 'hi', function(err, data) bad_gateway_res = { err = err, data = data } end)
+chat_client2.mqtt.on_http_response(502, '<html>502 Bad Gateway</html>')
+
+check(
+	bad_gateway_res ~= nil and bad_gateway_res.err ~= nil and bad_gateway_res.err.kind == 'TRANSPORT',
+	'non-JSON 5xx body does not masquerade as a SERVER (human-readable) reason'
+)
 
 -- ── Summary ─────────────────────────────────────────────────────────────────
 print()
